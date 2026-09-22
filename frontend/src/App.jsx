@@ -1,91 +1,419 @@
-import React, { useState, useEffect } from 'react';
-import { TaskAPI } from './services/api';
+import React, { useState, useEffect } from "react";
+import { TaskAPI, AuthAPI } from "./services/api";
 
 export default function App() {
+  // ----------------- AUTHENTICATION STATE -----------------
+  const [currentUser, setCurrentUser] = useState(() => {
+    const saved = localStorage.getItem("taskpulse_user");
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState("");
+
+  // ----------------- MAIN APP STATE -----------------
   const [tasks, setTasks] = useState([]);
-  const [stats, setStats] = useState({ total: 0, pendientes: 0, en_progreso: 0, completadas: 0, urgentes: 0, proyectos: [] });
+  const [users, setUsers] = useState([]);
+  const [stats, setStats] = useState({
+    total: 0,
+    pendientes: 0,
+    en_progreso: 0,
+    completadas: 0,
+    urgentes: 0,
+    proyectos: [],
+    project_counts: {},
+  });
   const [loading, setLoading] = useState(true);
-  
+
+  // Selected Project / Workspace ('Todos' or a specific project name)
+  const [currentProject, setCurrentProject] = useState("Todos");
+
+  // Active View per Project: 'kanban', 'list', 'calendar'
+  const [viewMode, setViewMode] = useState("kanban");
+
+  // Mobile menu / drawer toggle
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
   // Filters
-  const [search, setSearch] = useState('');
-  const [selectedProject, setSelectedProject] = useState('Todos');
-  const [priorityFilter, setPriorityFilter] = useState('Todas');
-  const [viewMode, setViewMode] = useState('kanban'); // 'kanban', 'list', 'calendar'
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("Todas");
+  const [priorityFilter, setPriorityFilter] = useState("Todas");
 
-  // Calendar state
+  // Date Filters
+  const [datePreset, setDatePreset] = useState("all"); // 'all', 'today', 'week', 'month', 'overdue', 'custom'
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+
+  // Drag & Drop State
+  const [draggedTaskId, setDraggedTaskId] = useState(null);
+  const [dragOverColumn, setDragOverColumn] = useState(null);
+
+  // Calendar State
   const [calendarDate, setCalendarDate] = useState(new Date());
-  const [selectedCalendarDay, setSelectedCalendarDay] = useState(new Date().getDate());
+  const [selectedCalendarDay, setSelectedCalendarDay] = useState(
+    new Date().getDate(),
+  );
 
-  // Modal
+  // Task Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const [formData, setFormData] = useState({
-    title: '',
-    description: '',
-    priority: 'Media',
-    status: 'Pendiente',
-    project: 'Q3 Lanzamiento',
-    assignee: 'Elena Vega',
-    due_date: ''
+    title: "",
+    description: "",
+    priority: "Media",
+    status: "Pendiente",
+    project: "Q3 Lanzamiento",
+    assignee: "Administrador Principal",
+    start_date: "",
+    due_date: "",
   });
 
-  // Toast
+  // Project Creation Modal State
+  const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+
+  // User Management Modal State (Admin Only)
+  const [isUserManagementOpen, setIsUserManagementOpen] = useState(false);
+  const [isUserFormOpen, setIsUserFormOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState(null);
+  const [userFormData, setUserFormData] = useState({
+    name: "",
+    email: "",
+    password: "",
+    role: "Desarrollador",
+    is_admin: false,
+  });
+
+  // Delete Confirmation Modal State (Custom UI Modal)
+  const [deleteModal, setDeleteModal] = useState({
+    isOpen: false,
+    type: "task", // 'task' | 'user'
+    id: null,
+    title: "",
+    subtitle: "",
+  });
+
+  // Toast State
   const [toast, setToast] = useState(null);
 
-  const teamMembers = [
-    'Elena Vega',
-    'Carlos Méndez',
-    'Sofía Ramos',
-    'Lucas Torres',
-    'Mateo Morales'
+  const defaultProjects = [
+    "Q3 Lanzamiento",
+    "Soporte al Cliente",
+    "Rediseño Web",
+    "Infraestructura",
+  ];
+  const [customProjects, setCustomProjects] = useState([]);
+
+  // Merge unique project names
+  const projectList = Array.from(
+    new Set([
+      ...defaultProjects,
+      ...customProjects,
+      ...(stats.proyectos || []),
+    ]),
+  );
+
+  const priorities = ["Baja", "Media", "Alta", "Urgente"];
+  const statuses = ["Pendiente", "En Progreso", "Completada"];
+  const availableRoles = [
+    "Administrador",
+    "Líder de Proyecto",
+    "Desarrollador",
+    "Diseñador UI/UX",
+    "QA Engineer",
+    "DevOps Engineer",
+    "Miembro",
   ];
 
-  const defaultProjects = ['Q3 Lanzamiento', 'Soporte al Cliente', 'Rediseño Web', 'Infraestructura'];
-  const projectList = Array.from(new Set([...defaultProjects, ...(stats.proyectos || [])]));
+  // ----------------- DATE RANGE CALCULATION -----------------
+  const getDateRange = () => {
+    const today = new Date();
+    const todayStr = today.toISOString().split("T")[0];
 
-  const priorities = ['Baja', 'Media', 'Alta', 'Urgente'];
-  const statuses = ['Pendiente', 'En Progreso', 'Completada'];
+    if (datePreset === "today") {
+      return { from: todayStr, to: todayStr, overdueOnly: false };
+    }
+    if (datePreset === "week") {
+      const startOfWeek = new Date(today);
+      const day = today.getDay();
+      const diff = today.getDate() - day + (day === 0 ? -6 : 1);
+      startOfWeek.setDate(diff);
 
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 6);
+      return {
+        from: startOfWeek.toISOString().split("T")[0],
+        to: endOfWeek.toISOString().split("T")[0],
+        overdueOnly: false,
+      };
+    }
+    if (datePreset === "month") {
+      const year = today.getFullYear();
+      const month = today.getMonth();
+      const firstDay = new Date(year, month, 1).toISOString().split("T")[0];
+      const lastDay = new Date(year, month + 1, 0).toISOString().split("T")[0];
+      return { from: firstDay, to: lastDay, overdueOnly: false };
+    }
+    if (datePreset === "overdue") {
+      return { from: "", to: todayStr, overdueOnly: true };
+    }
+    if (datePreset === "custom") {
+      return { from: fromDate, to: toDate, overdueOnly: false };
+    }
+    return { from: "", to: "", overdueOnly: false };
+  };
+
+  // ----------------- DATA LOADING -----------------
   const loadData = async () => {
+    if (!currentUser) return;
     try {
       setLoading(true);
-      const [taskList, statsData] = await Promise.all([
+      const dateParams = getDateRange();
+
+      const [taskList, statsData, usersData] = await Promise.all([
         TaskAPI.getTasks({
           search,
-          project: selectedProject,
-          priority: priorityFilter
+          status: statusFilter,
+          project: currentProject,
+          priority: priorityFilter,
+          fromDate: dateParams.from,
+          toDate: dateParams.overdueOnly ? "" : dateParams.to,
         }),
-        TaskAPI.getStats()
+        TaskAPI.getStats(),
+        AuthAPI.getUsers().catch(() => []),
       ]);
-      setTasks(taskList || []);
-      setStats(statsData || { total: 0, pendientes: 0, en_progreso: 0, completadas: 0, urgentes: 0, proyectos: [] });
+
+      let finalTasks = taskList || [];
+      if (dateParams.overdueOnly) {
+        const todayStr = new Date().toISOString().split("T")[0];
+        finalTasks = finalTasks.filter(
+          (t) =>
+            t.status !== "Completada" && t.due_date && t.due_date < todayStr,
+        );
+      }
+
+      setTasks(finalTasks);
+      setStats(
+        statsData || {
+          total: 0,
+          pendientes: 0,
+          en_progreso: 0,
+          completadas: 0,
+          urgentes: 0,
+          proyectos: [],
+        },
+      );
+      setUsers(usersData || []);
     } catch (err) {
       console.error(err);
-      showToast('Error de conexión con el backend', 'error');
+      showToast("Error de conexión con el servidor", "error");
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadData();
-  }, [search, selectedProject, priorityFilter]);
+    if (currentUser) {
+      loadData();
+    }
+  }, [
+    currentUser,
+    search,
+    currentProject,
+    statusFilter,
+    priorityFilter,
+    datePreset,
+    fromDate,
+    toDate,
+  ]);
 
-  const showToast = (message, type = 'success') => {
+  const showToast = (message, type = "success") => {
     setToast({ message, type });
-    setTimeout(() => setToast(null), 3000);
+    setTimeout(() => setToast(null), 3500);
   };
 
+  const resetFilters = () => {
+    setSearch("");
+    setStatusFilter("Todas");
+    setPriorityFilter("Todas");
+    setDatePreset("all");
+    setFromDate("");
+    setToDate("");
+  };
+
+  // ----------------- AUTH HANDLERS -----------------
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    if (!loginEmail || !loginPassword) {
+      setAuthError("Por favor ingresa tu correo y contraseña");
+      return;
+    }
+    try {
+      setAuthLoading(true);
+      setAuthError("");
+      const data = await AuthAPI.login(loginEmail, loginPassword);
+      setCurrentUser(data.user);
+      localStorage.setItem("taskpulse_user", JSON.stringify(data.user));
+      showToast(`¡Bienvenido de nuevo, ${data.user.name}!`);
+    } catch (err) {
+      setAuthError(err.message || "Credenciales incorrectas");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    localStorage.removeItem("taskpulse_user");
+    showToast("Sesión cerrada correctamente");
+  };
+
+  // ----------------- USER MANAGEMENT (ADMIN) -----------------
+  const handleOpenCreateUser = () => {
+    setEditingUser(null);
+    setUserFormData({
+      name: "",
+      email: "",
+      password: "",
+      role: "Desarrollador",
+      is_admin: false,
+    });
+    setIsUserFormOpen(true);
+  };
+
+  const handleOpenEditUser = (user) => {
+    setEditingUser(user);
+    setUserFormData({
+      name: user.name,
+      email: user.email,
+      password: "",
+      role: user.role,
+      is_admin: user.is_admin,
+    });
+    setIsUserFormOpen(true);
+  };
+
+  const handleSaveUser = async (e) => {
+    e.preventDefault();
+    if (!userFormData.name || !userFormData.email) {
+      showToast("Nombre y correo son obligatorios", "error");
+      return;
+    }
+    try {
+      if (editingUser) {
+        const payload = {
+          name: userFormData.name,
+          email: userFormData.email,
+          role: userFormData.role,
+          is_admin:
+            userFormData.is_admin || userFormData.role === "Administrador",
+        };
+        if (userFormData.password) {
+          payload.password = userFormData.password;
+        }
+        await AuthAPI.updateUser(editingUser.id, payload);
+        showToast("Usuario actualizado correctamente");
+      } else {
+        if (!userFormData.password) {
+          showToast(
+            "La contraseña inicial es requerida para nuevos usuarios",
+            "error",
+          );
+          return;
+        }
+        await AuthAPI.createUser({
+          name: userFormData.name,
+          email: userFormData.email,
+          password: userFormData.password,
+          role: userFormData.role,
+          is_admin:
+            userFormData.is_admin || userFormData.role === "Administrador",
+        });
+        showToast("Nuevo usuario creado exitosamente");
+      }
+      setIsUserFormOpen(false);
+      const updatedUsers = await AuthAPI.getUsers();
+      setUsers(updatedUsers);
+    } catch (err) {
+      showToast(err.message || "Error al guardar usuario", "error");
+    }
+  };
+
+  // ----------------- DELETE MODAL HANDLERS (MODAL PERSONALIZADO) -----------------
+  const openDeleteTaskModal = (task) => {
+    setDeleteModal({
+      isOpen: true,
+      type: "task",
+      id: task.id,
+      title: task.title,
+      subtitle: `Proyecto: ${task.project || "General"} • Responsable: ${task.assignee || "Sin asignar"}`,
+    });
+  };
+
+  const openDeleteUserModal = (user) => {
+    if (user.id === currentUser.id) {
+      showToast("No puedes eliminar tu propia cuenta de sesión", "error");
+      return;
+    }
+    setDeleteModal({
+      isOpen: true,
+      type: "user",
+      id: user.id,
+      title: user.name,
+      subtitle: `Rol: ${user.role} • Correo: ${user.email}`,
+    });
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteModal.id) return;
+    try {
+      if (deleteModal.type === "task") {
+        await TaskAPI.deleteTask(deleteModal.id);
+        showToast("Tarea eliminada correctamente");
+        if (isModalOpen && editingTask?.id === deleteModal.id) {
+          setIsModalOpen(false);
+        }
+        loadData();
+      } else if (deleteModal.type === "user") {
+        await AuthAPI.deleteUser(deleteModal.id);
+        showToast("Usuario eliminado correctamente");
+        const updatedUsers = await AuthAPI.getUsers();
+        setUsers(updatedUsers);
+      }
+      setDeleteModal({
+        isOpen: false,
+        type: "task",
+        id: null,
+        title: "",
+        subtitle: "",
+      });
+    } catch (err) {
+      showToast(err.message || "Error al eliminar", "error");
+    }
+  };
+
+  // ----------------- TASK ACTIONS -----------------
   const handleOpenCreate = (prefilledDate = null) => {
     setEditingTask(null);
+    const today = new Date().toISOString().split("T")[0];
+    const defaultAssignee =
+      users.length > 0
+        ? users[0].name
+        : currentUser?.name || "Administrador Principal";
+
     setFormData({
-      title: '',
-      description: '',
-      priority: 'Media',
-      status: 'Pendiente',
-      project: selectedProject !== 'Todos' ? selectedProject : 'Q3 Lanzamiento',
-      assignee: 'Elena Vega',
-      due_date: prefilledDate || new Date().toISOString().split('T')[0]
+      title: "",
+      description: "",
+      priority: "Media",
+      status: "Pendiente",
+      project:
+        currentProject !== "Todos"
+          ? currentProject
+          : projectList[0] || "Q3 Lanzamiento",
+      assignee: defaultAssignee,
+      start_date: today,
+      due_date: prefilledDate || today,
     });
     setIsModalOpen(true);
   };
@@ -94,12 +422,13 @@ export default function App() {
     setEditingTask(task);
     setFormData({
       title: task.title,
-      description: task.description || '',
-      priority: task.priority,
-      status: task.status,
-      project: task.project || 'General',
-      assignee: task.assignee,
-      due_date: task.due_date || ''
+      description: task.description || "",
+      priority: task.priority || "Media",
+      status: task.status || "Pendiente",
+      project: task.project || "General",
+      assignee: task.assignee || "Sin asignar",
+      start_date: task.start_date || "",
+      due_date: task.due_date || "",
     });
     setIsModalOpen(true);
   };
@@ -107,699 +436,2044 @@ export default function App() {
   const handleSaveTask = async (e) => {
     e.preventDefault();
     if (!formData.title.trim()) {
-      alert('Por favor, ingresa el título de la tarea.');
+      showToast("El título de la tarea es obligatorio", "error");
       return;
     }
 
     try {
       if (editingTask) {
         await TaskAPI.updateTask(editingTask.id, formData);
-        showToast('Tarea actualizada');
+        showToast("Tarea actualizada correctamente");
       } else {
         await TaskAPI.createTask(formData);
-        showToast('Tarea creada con éxito');
+        showToast("Tarea creada exitosamente");
       }
       setIsModalOpen(false);
       loadData();
     } catch (err) {
-      console.error(err);
-      showToast('Error al guardar la tarea', 'error');
+      showToast("Error al guardar la tarea", "error");
     }
   };
 
-  const handleQuickStatusChange = async (task, nextStatus) => {
+  const handleStatusChange = async (taskId, newStatus) => {
     try {
-      await TaskAPI.updateStatus(task.id, nextStatus);
-      showToast(`Estado: ${nextStatus}`);
+      await TaskAPI.updateStatus(taskId, newStatus);
+      showToast(`Tarea movida a "${newStatus}"`);
       loadData();
     } catch (err) {
-      console.error(err);
-      showToast('Error al cambiar estado', 'error');
+      showToast("Error al actualizar el estado", "error");
     }
   };
 
-  const handleDelete = async (taskId) => {
-    if (!window.confirm('¿Deseas eliminar esta tarea?')) return;
-    try {
-      await TaskAPI.deleteTask(taskId);
-      showToast('Tarea eliminada');
-      loadData();
-    } catch (err) {
-      console.error(err);
-      showToast('Error al eliminar', 'error');
+  const handleCreateProject = (e) => {
+    e.preventDefault();
+    const cleanName = newProjectName.trim();
+    if (!cleanName) return;
+    if (projectList.includes(cleanName)) {
+      showToast("El proyecto ya existe", "error");
+      return;
+    }
+    setCustomProjects((prev) => [...prev, cleanName]);
+    setCurrentProject(cleanName);
+    setNewProjectName("");
+    setIsNewProjectModalOpen(false);
+    showToast(`Proyecto "${cleanName}" creado`);
+  };
+
+  // ----------------- DRAG & DROP HANDLERS -----------------
+  const handleDragStart = (e, taskId) => {
+    setDraggedTaskId(taskId);
+    e.dataTransfer.setData("text/plain", taskId.toString());
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (e, columnStatus) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverColumn !== columnStatus) {
+      setDragOverColumn(columnStatus);
     }
   };
 
-  const getPriorityBadge = (p) => {
-    switch (p) {
-      case 'Urgente':
-        return 'bg-rose-500/20 text-rose-300 border-rose-500/30';
-      case 'Alta':
-        return 'bg-amber-500/20 text-amber-300 border-amber-500/30';
-      case 'Media':
-        return 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30';
-      default:
-        return 'bg-slate-700/30 text-slate-300 border-slate-600/30';
+  const handleDragLeave = () => {
+    setDragOverColumn(null);
+  };
+
+  const handleDrop = async (e, targetStatus) => {
+    e.preventDefault();
+    setDragOverColumn(null);
+    const taskId =
+      draggedTaskId || parseInt(e.dataTransfer.getData("text/plain"), 10);
+    if (!taskId) return;
+
+    const task = tasks.find((t) => t.id === taskId);
+    if (task && task.status !== targetStatus) {
+      await handleStatusChange(taskId, targetStatus);
     }
+    setDraggedTaskId(null);
   };
 
   // ----------------- CALENDAR HELPERS -----------------
-  const monthNames = [
-    'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
-    'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
-  ];
   const currentYear = calendarDate.getFullYear();
   const currentMonth = calendarDate.getMonth();
-  const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-  const firstDayOfWeek = (new Date(currentYear, currentMonth, 1).getDay() + 6) % 7; // Mon = 0
 
-  const calendarDays = [];
-  for (let i = 0; i < firstDayOfWeek; i++) {
-    calendarDays.push({ day: null, isCurrentMonth: false });
+  const getCalendarDays = () => {
+    const firstDayIndex = new Date(currentYear, currentMonth, 1).getDay();
+    const totalDaysInMonth = new Date(
+      currentYear,
+      currentMonth + 1,
+      0,
+    ).getDate();
+    const totalDaysPrevMonth = new Date(currentYear, currentMonth, 0).getDate();
+    const startOffset = firstDayIndex === 0 ? 6 : firstDayIndex - 1;
+
+    const days = [];
+    for (let i = startOffset - 1; i >= 0; i--) {
+      days.push({ day: totalDaysPrevMonth - i, isCurrentMonth: false });
+    }
+    for (let i = 1; i <= totalDaysInMonth; i++) {
+      days.push({ day: i, isCurrentMonth: true });
+    }
+    const remaining = 42 - days.length;
+    for (let i = 1; i <= remaining; i++) {
+      days.push({ day: i, isCurrentMonth: false });
+    }
+    return days;
+  };
+
+  const monthNames = [
+    "Enero",
+    "Febrero",
+    "Marzo",
+    "Abril",
+    "Mayo",
+    "Junio",
+    "Julio",
+    "Agosto",
+    "Septiembre",
+    "Octubre",
+    "Noviembre",
+    "Diciembre",
+  ];
+
+  const getPriorityBadge = (priority) => {
+    switch (priority) {
+      case "Urgente":
+        return "bg-rose-500/20 text-rose-300 border-rose-500/30";
+      case "Alta":
+        return "bg-amber-500/20 text-amber-300 border-amber-500/30";
+      case "Media":
+        return "bg-blue-500/20 text-blue-300 border-blue-500/30";
+      default:
+        return "bg-slate-500/20 text-slate-300 border-slate-500/30";
+    }
+  };
+
+  // Color Theme by Status for Kanban Cards
+  const getCardStatusTheme = (status) => {
+    switch (status) {
+      case "Pendiente":
+        return {
+          cardBg: "bg-[#1e1910]",
+          border: "border-amber-500/50 hover:border-amber-400",
+          accent: "text-amber-400",
+          glow: "hover:shadow-[0_0_15px_rgba(251,191,36,0.25)]",
+        };
+      case "En Progreso":
+        return {
+          cardBg: "bg-[#0f1d2e]",
+          border: "border-cyan-500/50 hover:border-cyan-400",
+          accent: "text-cyan-400",
+          glow: "hover:shadow-[0_0_15px_rgba(34,211,238,0.25)]",
+        };
+      case "Completada":
+        return {
+          cardBg: "bg-[#0e241c]",
+          border: "border-emerald-500/50 hover:border-emerald-400",
+          accent: "text-emerald-400",
+          glow: "hover:shadow-[0_0_15px_rgba(52,211,153,0.25)]",
+        };
+      default:
+        return {
+          cardBg: "bg-[#131b2e]",
+          border: "border-[#2d3449]",
+          accent: "text-slate-300",
+          glow: "",
+        };
+    }
+  };
+
+  // Color Theme by Status for Desktop List Rows (Solid, Fixed, High-Contrast Colors)
+  const getTableRowStatusStyle = (status) => {
+    switch (status) {
+      case "Pendiente":
+        return {
+          rowClass:
+            "border-l-[6px] border-l-amber-400 bg-[#231a0b] hover:bg-[#2d210e] border-b border-[#3d2b0e]",
+          dotColor: "bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)]",
+          titleColor: "text-amber-100 hover:text-amber-300 font-bold",
+          projectBadge: "bg-[#171005] text-amber-200 border-amber-500/40",
+          dateColor: "text-amber-200/80",
+          statusTooltip: "Pendiente",
+        };
+      case "En Progreso":
+        return {
+          rowClass:
+            "border-l-[6px] border-l-cyan-400 bg-[#0a233a] hover:bg-[#0e2f4e] border-b border-[#143c5e]",
+          dotColor: "bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)]",
+          titleColor: "text-cyan-100 hover:text-cyan-300 font-bold",
+          projectBadge: "bg-[#051524] text-cyan-200 border-cyan-500/40",
+          dateColor: "text-cyan-200/80",
+          statusTooltip: "En Progreso",
+        };
+      case "Completada":
+        return {
+          rowClass:
+            "border-l-[6px] border-l-emerald-400 bg-[#09281a] hover:bg-[#0e3523] border-b border-[#154632]",
+          dotColor: "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]",
+          titleColor:
+            "text-emerald-200 line-through opacity-85 hover:text-emerald-300 font-semibold",
+          projectBadge: "bg-[#041910] text-emerald-200 border-emerald-500/40",
+          dateColor: "text-emerald-300/80",
+          statusTooltip: "Completada",
+        };
+      default:
+        return {
+          rowClass:
+            "border-l-[6px] border-l-slate-600 bg-[#0b1326] hover:bg-[#131b2e] border-b border-[#222a3d]",
+          dotColor: "bg-slate-400",
+          titleColor: "text-white hover:text-indigo-400 font-bold",
+          projectBadge: "bg-[#060e20] text-indigo-300 border-[#222a3d]",
+          dateColor: "text-slate-400",
+          statusTooltip: "Sin estado",
+        };
+    }
+  };
+
+  const hasActiveFilters =
+    search ||
+    statusFilter !== "Todas" ||
+    priorityFilter !== "Todas" ||
+    datePreset !== "all" ||
+    fromDate ||
+    toDate;
+
+  // Selected Day Tasks for Agenda
+  const selectedDayFormatted = `${currentYear}-${String(currentMonth + 1).padStart(2, "0")}-${String(selectedCalendarDay).padStart(2, "0")}`;
+  const dayTasks = tasks.filter(
+    (t) =>
+      t.due_date === selectedDayFormatted ||
+      t.start_date === selectedDayFormatted,
+  );
+  const calendarDays = getCalendarDays();
+
+  // =========================================================================
+  // 1. PANTALLA DE LOGIN (SI NO HAY SESIÓN ACTIVA)
+  // =========================================================================
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-[#060e20] flex items-center justify-center p-4 text-slate-100 font-sans relative overflow-hidden">
+        {/* Glow ambient background effects */}
+        <div className="absolute -top-40 -left-40 w-96 h-96 bg-indigo-600/20 rounded-full blur-[120px] pointer-events-none"></div>
+        <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-cyan-600/20 rounded-full blur-[120px] pointer-events-none"></div>
+
+        <div className="w-full max-w-md bg-[#0b1326]/90 backdrop-blur-xl border border-[#222a3d] p-6 sm:p-8 rounded-3xl shadow-2xl relative z-10 flex flex-col gap-6">
+          {/* Logo & Header */}
+          <div className="text-center flex flex-col items-center gap-2">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-cyan-500 flex items-center justify-center shadow-lg shadow-indigo-500/20 mb-1">
+              <span className="material-symbols-outlined text-white text-3xl font-bold">
+                task_alt
+              </span>
+            </div>
+            <h1 className="text-2xl font-black text-white tracking-tight">
+              TAREAS TS
+            </h1>
+            <p className="text-xs text-slate-400">
+              Gestor de Tareas de Equipo • Acceso al Sistema
+            </p>
+          </div>
+
+          {/* Error alert */}
+          {authError && (
+            <div className="p-3.5 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-300 text-xs flex items-center gap-2">
+              <span className="material-symbols-outlined text-base shrink-0">
+                error
+              </span>
+              <span>{authError}</span>
+            </div>
+          )}
+
+          {/* Login Form */}
+          <form onSubmit={handleLogin} className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-semibold text-slate-300">
+                Correo Electrónico
+              </label>
+              <div className="relative flex items-center">
+                <span className="material-symbols-outlined absolute left-3 text-slate-500 text-lg">
+                  mail
+                </span>
+                <input
+                  type="email"
+                  required
+                  value={loginEmail}
+                  placeholder="correo@ejemplo.com"
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  className="w-full bg-[#060e20] text-white text-sm pl-10 pr-3 py-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 transition-colors"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-semibold text-slate-300">
+                Contraseña
+              </label>
+              <div className="relative flex items-center">
+                <span className="material-symbols-outlined absolute left-3 text-slate-500 text-lg">
+                  lock
+                </span>
+                <input
+                  type="password"
+                  required
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  placeholder="Tu contraseña"
+                  className="w-full bg-[#060e20] text-white text-sm pl-10 pr-3 py-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 transition-colors"
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={authLoading}
+              className="mt-2 w-full py-3 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-600/30 transition-all text-sm flex items-center justify-center gap-2 disabled:opacity-50">
+              {authLoading ? (
+                <>
+                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                  <span>Iniciando sesión...</span>
+                </>
+              ) : (
+                <>
+                  <span>Ingresar</span>
+                  <span className="material-symbols-outlined text-lg">
+                    arrow_forward
+                  </span>
+                </>
+              )}
+            </button>
+          </form>
+
+          {/* Admin initial account hint
+          <div className="p-3 bg-[#131b2e] border border-[#222a3d] rounded-xl text-xs text-slate-400 flex flex-col gap-1">
+            <div className="flex items-center gap-1.5 font-bold text-indigo-300">
+              <span className="material-symbols-outlined text-[16px]">
+                info
+              </span>
+              <span>Cuenta Administrador Inicial:</span>
+            </div>
+            <div className="flex flex-col gap-0.5 text-[11px] text-slate-300 pl-5">
+              <span>
+                <strong>Email:</strong> admin@taskpulse.io
+              </span>
+              <span>
+                <strong>Password:</strong> admin123
+              </span>
+            </div>
+            <span className="text-[10px] text-slate-500 mt-1 pl-5">
+              * El Administrador puede crear nuevos usuarios y asignar roles
+              desde el panel.
+            </span>
+          </div> */}
+        </div>
+      </div>
+    );
   }
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const dayTasks = tasks.filter(t => t.due_date === dateStr);
-    calendarDays.push({ day: d, isCurrentMonth: true, dateStr, tasks: dayTasks });
-  }
 
-  const selectedDateString = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(selectedCalendarDay).padStart(2, '0')}`;
-  const selectedDayTasks = tasks.filter(t => t.due_date === selectedDateString);
-
+  // =========================================================================
+  // 2. APLICACIÓN PRINCIPAL RESPONSIVA (CON SESIÓN ACTIVA)
+  // =========================================================================
   return (
-    <div className="bg-[#0b1326] text-[#dae2fd] min-h-screen font-sans flex flex-col">
-      {/* Top Header */}
-      <header className="h-16 bg-[#060e20] border-b border-[#222a3d] px-6 flex items-center justify-between sticky top-0 z-30 shadow-md">
-        <div className="flex items-center gap-3">
-          <img
-            alt="Logo"
-            className="h-8 w-auto"
-            src="https://lh3.googleusercontent.com/aida/AEtjO1URpY6_v6dN4qWs8G7HguK6-N82jAfZqi9dDzw_ShbeS_52dDdTiuSOTUD3XO2JQdkd7r3L66APv7udS14jl4cLomoNPBJh787sUfvuo5Big2EBmTTSdzYlS7c1Vb34HW3BeLrMf6OJLbc2AGj6-UeL_6z2ySeoUeZ8822VlE9DsHiQO8kJyl0M7-CWcN2nA-KCumbdr4C8M-4lZjW2_5plu9IQINQYMVire4dsVYd0a7M14h-ZOBsC2xcp"
-          />
-          <div className="flex flex-col">
-            <span className="font-bold text-base text-white tracking-tight">TaskPulse</span>
-            <span className="text-[10px] text-primary uppercase font-semibold">Gestor de Tareas & Proyectos</span>
+    <div className="min-h-screen bg-[#060e20] text-slate-100 flex flex-col font-sans relative selection:bg-indigo-500 selection:text-white">
+      {/* Toast Notification */}
+      {toast && (
+        <div
+          className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 text-sm font-semibold transition-all animate-bounce ${
+            toast.type === "error"
+              ? "bg-rose-600 text-white"
+              : "bg-emerald-600 text-white"
+          }`}>
+          <span className="material-symbols-outlined text-lg">
+            {toast.type === "error" ? "error" : "check_circle"}
+          </span>
+          <span>{toast.message}</span>
+        </div>
+      )}
+
+      {/* ----------------- TOP NAVBAR PRINCIPAL (LIMPIO Y ESPACIOSO) ----------------- */}
+      <header className="sticky top-0 z-40 bg-[#0b1326]/95 backdrop-blur-md border-b border-[#222a3d] px-3 sm:px-6 py-2.5 flex items-center justify-between gap-2 sm:gap-4">
+        {/* Left: Mobile Drawer Trigger + Brand Logo + Project Tag */}
+        <div className="flex items-center gap-2.5 shrink-0">
+          <button
+            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+            className="md:hidden p-2 rounded-xl bg-[#131b2e] hover:bg-[#222a3d] text-slate-200 focus:outline-none transition-colors"
+            title="Menú de Proyectos">
+            <span className="material-symbols-outlined text-xl">
+              {isMobileMenuOpen ? "close" : "menu"}
+            </span>
+          </button>
+
+          <div
+            className="flex items-center gap-2 cursor-pointer"
+            onClick={() => setCurrentProject("Todos")}>
+            <span className="font-extrabold text-base tracking-tight text-white">
+              Tareas TS
+            </span>
+          </div>
+
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#131b2e] border border-[#222a3d] text-xs text-slate-300">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span className="font-semibold max-w-[140px] truncate">
+              {currentProject === "Todos" ? "Panel General" : currentProject}
+            </span>
           </div>
         </div>
 
-        {/* Global Action Button */}
-        <button
-          onClick={() => handleOpenCreate()}
-          className="flex items-center gap-2 px-4 py-2 bg-[#4f46e5] hover:bg-[#4338ca] text-white rounded-lg text-sm font-semibold shadow-lg shadow-indigo-500/30 transition-all active:scale-95"
-        >
-          <span className="material-symbols-outlined text-[18px]">add</span>
-          <span>Nueva Tarea</span>
-        </button>
+        {/* Center: Desktop View Switcher (Hidden on Mobile, shown smoothly on Desktop) */}
+        <div className="hidden md:flex items-center bg-[#060e20] p-1 rounded-xl border border-[#222a3d]">
+          <button
+            onClick={() => setViewMode("kanban")}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+              viewMode === "kanban"
+                ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                : "text-slate-400 hover:text-white"
+            }`}>
+            <span className="material-symbols-outlined text-[16px]">
+              view_kanban
+            </span>
+            <span>Tablero</span>
+          </button>
+
+          <button
+            onClick={() => setViewMode("list")}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+              viewMode === "list"
+                ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                : "text-slate-400 hover:text-white"
+            }`}>
+            <span className="material-symbols-outlined text-[16px]">
+              format_list_bulleted
+            </span>
+            <span>Lista</span>
+          </button>
+
+          <button
+            onClick={() => setViewMode("calendar")}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+              viewMode === "calendar"
+                ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                : "text-slate-400 hover:text-white"
+            }`}>
+            <span className="material-symbols-outlined text-[16px]">
+              calendar_month
+            </span>
+            <span>Calendario</span>
+          </button>
+        </div>
+
+        {/* Right: Actions, Admin Button & User Profile */}
+        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+          {/* Admin User Management Button */}
+          {currentUser?.is_admin && (
+            <button
+              onClick={() => setIsUserManagementOpen(true)}
+              className="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 bg-[#131b2e] hover:bg-[#222a3d] text-amber-300 hover:text-amber-200 border border-amber-500/30 rounded-xl text-xs font-bold transition-all shadow-sm"
+              title="Gestión de Cuentas y Roles">
+              <span className="material-symbols-outlined text-[16px]">
+                manage_accounts
+              </span>
+              <span className="hidden sm:inline">Usuarios</span>
+            </button>
+          )}
+
+          {/* New Task Button */}
+          <button
+            onClick={() => handleOpenCreate()}
+            className="px-2.5 sm:px-3.5 py-1.5 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white text-xs font-bold rounded-xl shadow-md shadow-indigo-600/20 transition-all flex items-center gap-1">
+            <span className="material-symbols-outlined text-[18px]">add</span>
+            <span className="hidden sm:inline">Nueva Tarea</span>
+          </button>
+
+          {/* User Profile & Logout */}
+          <div className="flex items-center gap-1.5 sm:gap-2 pl-1.5 border-l border-[#222a3d]">
+            <div className="flex items-center gap-2">
+              <div
+                className="w-8 h-8 rounded-full bg-gradient-to-tr from-purple-600 to-indigo-600 flex items-center justify-center text-xs font-bold text-white border border-indigo-400/40 shrink-0"
+                title={`${currentUser.name} (${currentUser.role})`}>
+                {currentUser.name.charAt(0)}
+              </div>
+              <div className="hidden lg:flex flex-col text-left">
+                <span className="text-xs font-bold text-white leading-tight max-w-[110px] truncate">
+                  {currentUser.name}
+                </span>
+                <span className="text-[10px] text-indigo-300 font-medium truncate">
+                  {currentUser.role}
+                </span>
+              </div>
+            </div>
+
+            <button
+              onClick={handleLogout}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+              title="Cerrar sesión">
+              <span className="material-symbols-outlined text-[18px]">
+                logout
+              </span>
+            </button>
+          </div>
+        </div>
       </header>
 
-      {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-6 flex flex-col gap-6">
-        
-        {/* Projects Tab / Filter Bar */}
-        <div className="flex items-center gap-2 overflow-x-auto pb-1">
-          <span className="text-xs font-bold text-slate-400 uppercase tracking-wider mr-2 flex items-center gap-1">
-            <span className="material-symbols-outlined text-[16px] text-indigo-400">folder</span>
-            Proyectos:
-          </span>
+      {/* ----------------- SUB-NAVBAR MÓVIL (CÓMODO Y FLUIDO PARA CELULARES) ----------------- */}
+      <div className="md:hidden bg-[#0b1326] border-b border-[#222a3d] px-3 py-2 flex items-center justify-center">
+        <div className="grid grid-cols-3 gap-1 bg-[#060e20] p-1 rounded-xl border border-[#222a3d] w-full max-w-sm">
           <button
-            onClick={() => setSelectedProject('Todos')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0 ${
-              selectedProject === 'Todos'
-                ? 'bg-indigo-600 text-white shadow-md'
-                : 'bg-[#131b2e] text-slate-400 hover:text-white border border-[#222a3d]'
-            }`}
-          >
-            Todos ({stats.total})
+            onClick={() => setViewMode("kanban")}
+            className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+              viewMode === "kanban"
+                ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                : "text-slate-400 hover:text-white"
+            }`}>
+            <span className="material-symbols-outlined text-[16px]">
+              view_kanban
+            </span>
+            <span>Tablero</span>
           </button>
-          {projectList.map((proj) => {
-            const isSelected = selectedProject === proj;
-            const count = tasks.filter(t => t.project === proj).length;
-            return (
+
+          <button
+            onClick={() => setViewMode("list")}
+            className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+              viewMode === "list"
+                ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                : "text-slate-400 hover:text-white"
+            }`}>
+            <span className="material-symbols-outlined text-[16px]">
+              format_list_bulleted
+            </span>
+            <span>Lista</span>
+          </button>
+
+          <button
+            onClick={() => setViewMode("calendar")}
+            className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+              viewMode === "calendar"
+                ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                : "text-slate-400 hover:text-white"
+            }`}>
+            <span className="material-symbols-outlined text-[16px]">
+              calendar_month
+            </span>
+            <span>Calendario</span>
+          </button>
+        </div>
+      </div>
+
+      {/* ----------------- CONTENEDOR PRINCIPAL: SIDEBAR + VISTAS ----------------- */}
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* BACKDROP FOR MOBILE SIDEBAR */}
+        {isMobileMenuOpen && (
+          <div
+            onClick={() => setIsMobileMenuOpen(false)}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-30 md:hidden"></div>
+        )}
+
+        {/* ----------------- SIDEBAR DE PROYECTOS (RESPONSIVO) ----------------- */}
+        <aside
+          className={`fixed md:static inset-y-0 left-0 z-30 w-64 bg-[#0b1326] border-r border-[#222a3d] p-4 flex flex-col justify-between shrink-0 transition-transform duration-200 ease-in-out ${
+            isMobileMenuOpen
+              ? "translate-x-0 top-[88px] md:top-14 h-[calc(100vh-5.5rem)] md:h-[calc(100vh-3.5rem)] shadow-2xl"
+              : "-translate-x-full md:translate-x-0"
+          }`}>
+          <div className="flex flex-col gap-5 overflow-y-auto">
+            {/* General Workspace Switcher */}
+            <div>
+              <span className="text-[11px] font-extrabold uppercase text-slate-400 tracking-wider block px-2 mb-2">
+                Espacios de Trabajo
+              </span>
               <button
-                key={proj}
-                onClick={() => setSelectedProject(proj)}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0 flex items-center gap-1.5 ${
-                  isSelected
-                    ? 'bg-indigo-600 text-white shadow-md'
-                    : 'bg-[#131b2e] text-slate-400 hover:text-white border border-[#222a3d]'
-                }`}
-              >
-                <span>{proj}</span>
-                <span className={`text-[10px] px-1.5 py-0.2 rounded ${isSelected ? 'bg-indigo-800 text-white' : 'bg-[#222a3d] text-slate-300'}`}>
-                  {count}
+                onClick={() => {
+                  setCurrentProject("Todos");
+                  setIsMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                  currentProject === "Todos"
+                    ? "bg-gradient-to-r from-indigo-600/30 to-indigo-600/10 text-white border border-indigo-500/30 shadow-inner"
+                    : "text-slate-300 hover:bg-[#131b2e]"
+                }`}>
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-[18px] text-indigo-400">
+                    dashboard
+                  </span>
+                  <span>Panel General</span>
+                </div>
+                <span className="text-[11px] bg-[#171f33] px-2 py-0.5 rounded-full text-slate-300 font-semibold">
+                  {stats.total}
                 </span>
               </button>
-            );
-          })}
-        </div>
+            </div>
 
-        {/* KPI Summary Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <div className="bg-[#131b2e] p-4 rounded-xl border border-[#222a3d] flex flex-col">
-            <span className="text-xs text-slate-400 font-medium">Total Tareas</span>
-            <span className="text-2xl font-bold text-white mt-1">{tasks.length}</span>
-          </div>
-          <div className="bg-[#131b2e] p-4 rounded-xl border border-[#222a3d] flex flex-col">
-            <span className="text-xs text-amber-400 font-medium">Pendientes</span>
-            <span className="text-2xl font-bold text-white mt-1">{tasks.filter(t => t.status === 'Pendiente').length}</span>
-          </div>
-          <div className="bg-[#131b2e] p-4 rounded-xl border border-[#222a3d] flex flex-col">
-            <span className="text-xs text-cyan-400 font-medium">En Progreso</span>
-            <span className="text-2xl font-bold text-white mt-1">{tasks.filter(t => t.status === 'En Progreso').length}</span>
-          </div>
-          <div className="bg-[#131b2e] p-4 rounded-xl border border-[#222a3d] flex flex-col">
-            <span className="text-xs text-emerald-400 font-medium">Completadas</span>
-            <span className="text-2xl font-bold text-white mt-1">{tasks.filter(t => t.status === 'Completada').length}</span>
-          </div>
-        </div>
+            {/* Project List */}
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between px-2 mb-1">
+                <span className="text-[11px] font-extrabold uppercase text-slate-400 tracking-wider">
+                  Proyectos
+                </span>
+                <button
+                  onClick={() => setIsNewProjectModalOpen(true)}
+                  className="text-indigo-400 hover:text-indigo-300 text-xs font-bold flex items-center gap-0.5"
+                  title="Crear nuevo proyecto">
+                  <span className="material-symbols-outlined text-[14px]">
+                    add
+                  </span>
+                  <span>Nuevo</span>
+                </button>
+              </div>
 
-        {/* Toolbar: Search, Priority filter & View Mode Switcher */}
-        <div className="bg-[#131b2e] p-4 rounded-xl border border-[#222a3d] flex flex-col sm:flex-row gap-4 items-center justify-between">
-          {/* Search Input */}
-          <div className="relative w-full sm:w-80">
-            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-[18px]">
-              search
-            </span>
-            <input
-              type="text"
-              placeholder="Buscar tareas, proyectos, responsables..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full bg-[#0b1326] text-sm text-white pl-9 pr-3 py-2 rounded-lg border border-[#2d3449] focus:outline-none focus:border-indigo-500"
-            />
-          </div>
+              {projectList.map((proj) => {
+                const isSelected = currentProject === proj;
+                const projCount = stats.project_counts?.[proj] ?? 0;
 
-          {/* Controls */}
-          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
-            <select
-              value={priorityFilter}
-              onChange={(e) => setPriorityFilter(e.target.value)}
-              className="bg-[#0b1326] text-xs text-slate-200 px-3 py-2 rounded-lg border border-[#2d3449] focus:outline-none cursor-pointer"
-            >
-              <option value="Todas">Prioridad: Todas</option>
-              {priorities.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
+                return (
+                  <button
+                    key={proj}
+                    onClick={() => {
+                      setCurrentProject(proj);
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all ${
+                      isSelected
+                        ? "bg-indigo-600 text-white font-bold shadow-md shadow-indigo-600/20"
+                        : "text-slate-300 hover:bg-[#131b2e]"
+                    }`}>
+                    <div className="flex items-center gap-2 truncate">
+                      <span
+                        className={`w-2 h-2 rounded-full shrink-0 ${isSelected ? "bg-white" : "bg-indigo-400"}`}></span>
+                      <span className="truncate">{proj}</span>
+                    </div>
+                    <span
+                      className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold shrink-0 ${
+                        isSelected
+                          ? "bg-white/20 text-white"
+                          : "bg-[#171f33] text-slate-400"
+                      }`}>
+                      {projCount}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
 
-            {/* View Mode Toggle: Kanban / Lista / Calendario */}
-            <div className="flex items-center bg-[#0b1326] p-1 rounded-lg border border-[#2d3449]">
-              <button
-                onClick={() => setViewMode('kanban')}
-                className={`px-3 py-1.5 text-xs font-semibold rounded transition-colors flex items-center gap-1 ${
-                  viewMode === 'kanban' ? 'bg-[#4f46e5] text-white' : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <span className="material-symbols-outlined text-[14px]">view_kanban</span>
-                Tablero
-              </button>
-              <button
-                onClick={() => setViewMode('list')}
-                className={`px-3 py-1.5 text-xs font-semibold rounded transition-colors flex items-center gap-1 ${
-                  viewMode === 'list' ? 'bg-[#4f46e5] text-white' : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <span className="material-symbols-outlined text-[14px]">checklist</span>
-                Lista
-              </button>
-              <button
-                onClick={() => setViewMode('calendar')}
-                className={`px-3 py-1.5 text-xs font-semibold rounded transition-colors flex items-center gap-1 ${
-                  viewMode === 'calendar' ? 'bg-[#4f46e5] text-white' : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <span className="material-symbols-outlined text-[14px]">calendar_month</span>
-                Calendario
-              </button>
+            {/* Quick Metrics in Sidebar */}
+            <div className="p-3.5 bg-[#060e20] border border-[#222a3d] rounded-2xl flex flex-col gap-2">
+              <span className="text-[10px] uppercase font-extrabold text-slate-400 tracking-wider">
+                Resumen Rápido
+              </span>
+              <div className="grid grid-cols-2 gap-2 text-center">
+                <div className="bg-[#131b2e] p-2 rounded-xl border border-[#222a3d]">
+                  <span className="block text-xs font-bold text-amber-400">
+                    {stats.pendientes}
+                  </span>
+                  <span className="text-[9px] text-slate-400 font-semibold">
+                    Pendientes
+                  </span>
+                </div>
+                <div className="bg-[#131b2e] p-2 rounded-xl border border-[#222a3d]">
+                  <span className="block text-xs font-bold text-cyan-400">
+                    {stats.en_progreso}
+                  </span>
+                  <span className="text-[9px] text-slate-400 font-semibold">
+                    En Curso
+                  </span>
+                </div>
+                <div className="bg-[#131b2e] p-2 rounded-xl border border-[#222a3d]">
+                  <span className="block text-xs font-bold text-emerald-400">
+                    {stats.completadas}
+                  </span>
+                  <span className="text-[9px] text-slate-400 font-semibold">
+                    Completas
+                  </span>
+                </div>
+                <div className="bg-[#131b2e] p-2 rounded-xl border border-[#222a3d]">
+                  <span className="block text-xs font-bold text-rose-400">
+                    {stats.urgentes}
+                  </span>
+                  <span className="text-[9px] text-slate-400 font-semibold">
+                    Urgentes
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* ----------------- VIEWS ----------------- */}
-        {loading ? (
-          <div className="text-center py-20 text-slate-400 text-sm">Cargando tareas...</div>
-        ) : viewMode === 'kanban' ? (
-          /* 1. Kanban Board */
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
-            {statuses.map((colStatus) => {
-              const colTasks = tasks.filter(t => t.status === colStatus);
+          {/* User info & mobile admin button at bottom of sidebar */}
+          <div className="pt-4 border-t border-[#222a3d] flex flex-col gap-2">
+            {currentUser?.is_admin && (
+              <button
+                onClick={() => {
+                  setIsUserManagementOpen(true);
+                  setIsMobileMenuOpen(false);
+                }}
+                className="w-full flex items-center justify-center gap-2 py-2 bg-[#131b2e] hover:bg-[#222a3d] text-amber-300 border border-amber-500/30 rounded-xl text-xs font-bold transition-all">
+                <span className="material-symbols-outlined text-[16px]">
+                  manage_accounts
+                </span>
+                <span>Gestión de Usuarios</span>
+              </button>
+            )}
+            <div className="flex items-center justify-between text-xs text-slate-400 px-1">
+              <span className="truncate">{currentUser.name}</span>
+              <span className="text-[10px] text-indigo-400 font-bold">
+                {currentUser.role}
+              </span>
+            </div>
+          </div>
+        </aside>
 
-              return (
-                <div key={colStatus} className="bg-[#060e20] rounded-xl border border-[#222a3d] p-4 flex flex-col gap-3 min-h-[450px]">
-                  {/* Column Header */}
-                  <div className="flex items-center justify-between pb-2 border-b border-[#222a3d]">
-                    <div className="flex items-center gap-2">
-                      <span className={`w-2.5 h-2.5 rounded-full ${
-                        colStatus === 'Pendiente' ? 'bg-amber-400' : colStatus === 'En Progreso' ? 'bg-cyan-400' : 'bg-emerald-400'
-                      }`}></span>
-                      <span className="font-bold text-sm text-white">{colStatus}</span>
+        {/* ----------------- CONTENIDO PRINCIPAL: VISTAS Y FILTROS ----------------- */}
+        <main className="flex-1 overflow-y-auto p-3 sm:p-6 pb-28 sm:pb-8 flex flex-col gap-4 sm:gap-6">
+          {/* ----------------- BARRA SUPERIOR DE FILTROS RESPONSIVA ----------------- */}
+          <div className="bg-[#0b1326] p-3 sm:p-4 rounded-2xl border border-[#222a3d] flex flex-col gap-3 shadow-lg">
+            <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
+              {/* Search Bar */}
+              <div className="relative flex-1">
+                <span className="material-symbols-outlined absolute left-3 top-2.5 text-slate-400 text-[18px]">
+                  search
+                </span>
+                <input
+                  type="text"
+                  placeholder="Buscar por título, descripción, proyecto o responsable..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="w-full bg-[#060e20] text-white text-xs pl-9 pr-3 py-2 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 placeholder:text-slate-500 transition-colors"
+                />
+              </div>
+
+              {/* Filter Dropdowns Grid */}
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Status Filter */}
+                <div className="flex items-center gap-1 bg-[#060e20] px-2.5 py-1 rounded-xl border border-[#2d3449]">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase">
+                    Estado:
+                  </span>
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                    className="bg-transparent text-xs text-slate-200 py-1 pl-1 pr-2 focus:outline-none cursor-pointer font-semibold">
+                    <option value="Todas" className="bg-[#131b2e]">
+                      Todas
+                    </option>
+                    <option value="Pendiente" className="bg-[#131b2e]">
+                      Pendiente
+                    </option>
+                    <option value="En Progreso" className="bg-[#131b2e]">
+                      En Progreso
+                    </option>
+                    <option value="Completada" className="bg-[#131b2e]">
+                      Completada
+                    </option>
+                  </select>
+                </div>
+
+                {/* Date Preset Filter */}
+                <div className="flex items-center gap-1 bg-[#060e20] px-2.5 py-1 rounded-xl border border-[#2d3449]">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase">
+                    Fechas:
+                  </span>
+                  <select
+                    value={datePreset}
+                    onChange={(e) => setDatePreset(e.target.value)}
+                    className="bg-transparent text-xs text-slate-200 py-1 pl-1 pr-2 focus:outline-none cursor-pointer font-semibold">
+                    <option value="all" className="bg-[#131b2e]">
+                      Todas las fechas
+                    </option>
+                    <option value="today" className="bg-[#131b2e]">
+                      Hoy
+                    </option>
+                    <option value="week" className="bg-[#131b2e]">
+                      Esta semana
+                    </option>
+                    <option value="month" className="bg-[#131b2e]">
+                      Este mes
+                    </option>
+                    <option value="overdue" className="bg-[#131b2e]">
+                      ⚠️ Vencidas
+                    </option>
+                    <option value="custom" className="bg-[#131b2e]">
+                      Rango personalizado
+                    </option>
+                  </select>
+                </div>
+
+                {/* Priority Filter */}
+                <div className="flex items-center gap-1 bg-[#060e20] px-2.5 py-1 rounded-xl border border-[#2d3449]">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase">
+                    Prioridad:
+                  </span>
+                  <select
+                    value={priorityFilter}
+                    onChange={(e) => setPriorityFilter(e.target.value)}
+                    className="bg-transparent text-xs text-slate-200 py-1 pl-1 pr-2 focus:outline-none cursor-pointer font-semibold">
+                    <option value="Todas" className="bg-[#131b2e]">
+                      Todas
+                    </option>
+                    {priorities.map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Reset Filters Button */}
+                {hasActiveFilters && (
+                  <button
+                    onClick={resetFilters}
+                    className="px-2.5 py-1.5 bg-[#222a3d] hover:bg-[#2d3449] text-xs font-semibold text-slate-300 rounded-xl transition-colors flex items-center gap-1"
+                    title="Limpiar todos los filtros">
+                    <span className="material-symbols-outlined text-[14px]">
+                      filter_alt_off
+                    </span>
+                    <span>Limpiar</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Custom Date Range Picker (shown when 'custom' is selected) */}
+            {datePreset === "custom" && (
+              <div className="flex items-center gap-3 pt-2 border-t border-[#222a3d] flex-wrap animate-in fade-in duration-150">
+                <span className="text-xs font-bold text-indigo-300">
+                  Rango de fechas:
+                </span>
+                <div className="flex items-center gap-2 text-xs text-slate-300">
+                  <span>Desde:</span>
+                  <input
+                    type="date"
+                    value={fromDate}
+                    onChange={(e) => setFromDate(e.target.value)}
+                    className="bg-[#060e20] text-white text-xs px-2.5 py-1 rounded-lg border border-[#2d3449] focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div className="flex items-center gap-2 text-xs text-slate-300">
+                  <span>Hasta:</span>
+                  <input
+                    type="date"
+                    value={toDate}
+                    onChange={(e) => setToDate(e.target.value)}
+                    className="bg-[#060e20] text-white text-xs px-2.5 py-1 rounded-lg border border-[#2d3449] focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ----------------- 1. VISTA TABLERO KANBAN (OVERFLOW Y SCROLL INTERNO POR COLUMNA) ----------------- */}
+          {loading ? (
+            <div className="text-center py-20 text-slate-400 text-sm flex flex-col items-center gap-2">
+              <span className="w-6 h-6 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin"></span>
+              <span>Cargando tareas...</span>
+            </div>
+          ) : viewMode === "kanban" ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6 items-stretch h-[calc(100vh-230px)] min-h-[480px] max-h-[calc(100vh-230px)]">
+              {statuses.map((colStatus) => {
+                const colTasks = tasks.filter((t) => t.status === colStatus);
+                const isDragTarget = dragOverColumn === colStatus;
+
+                return (
+                  <div
+                    key={colStatus}
+                    onDragOver={(e) => handleDragOver(e, colStatus)}
+                    onDragLeave={handleDragLeave}
+                    onDrop={(e) => handleDrop(e, colStatus)}
+                    className={`rounded-2xl border p-3.5 sm:p-4 flex flex-col h-full max-h-full overflow-hidden transition-all ${
+                      isDragTarget
+                        ? "bg-[#17233d] border-indigo-400 ring-2 ring-indigo-500/50 scale-[1.01]"
+                        : "bg-[#0b1326] border-[#222a3d]"
+                    }`}>
+                    {/* Column Header (Fixed) */}
+                    <div className="flex items-center justify-between pb-3 border-b border-[#222a3d] mb-3 shrink-0">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`w-3 h-3 rounded-full ${
+                            colStatus === "Pendiente"
+                              ? "bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.6)]"
+                              : colStatus === "En Progreso"
+                                ? "bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.6)]"
+                                : "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]"
+                          }`}></span>
+                        <span className="font-bold text-sm text-white">
+                          {colStatus}
+                        </span>
+                      </div>
+                      <span className="text-xs bg-[#171f33] text-slate-200 font-bold px-2 py-0.5 rounded-full border border-[#2d3449]">
+                        {colTasks.length}
+                      </span>
                     </div>
-                    <span className="text-xs bg-[#171f33] text-slate-300 font-semibold px-2 py-0.5 rounded-full">
-                      {colTasks.length}
+
+                    {/* Task Cards Container (Internal Smooth Overflow Scroll) */}
+                    <div className="flex flex-col gap-3 overflow-y-auto flex-1 pr-1.5 scroll-smooth">
+                      {colTasks.length === 0 ? (
+                        <div
+                          style={{
+                            minHeight: "195px",
+                            maxHeight: "195px",
+                            height: "195px",
+                          }}
+                          className="w-full shrink-0 h-[195px] min-h-[195px] max-h-[195px] text-center text-xs text-slate-500 italic border-2 border-dashed border-[#1e293b] rounded-xl p-4 flex flex-col items-center justify-center gap-1">
+                          <span className="material-symbols-outlined text-slate-600 text-2xl">
+                            drag_indicator
+                          </span>
+                          <span>Arrastra tareas aquí</span>
+                        </div>
+                      ) : (
+                        colTasks.map((task) => {
+                          const theme = getCardStatusTheme(task.status);
+                          const isBeingDragged = draggedTaskId === task.id;
+
+                          return (
+                            /* Uniform Rigid Height Task Card (195px) with shrink-0 and explicit inline styles */
+                            <div
+                              key={task.id}
+                              draggable="true"
+                              onDragStart={(e) => handleDragStart(e, task.id)}
+                              style={{
+                                minHeight: "195px",
+                                maxHeight: "195px",
+                                height: "195px",
+                              }}
+                              className={`w-full shrink-0 h-[195px] min-h-[195px] max-h-[195px] p-3.5 rounded-xl border transition-all cursor-grab active:cursor-grabbing shadow-sm flex flex-col justify-between group ${
+                                theme.cardBg
+                              } ${theme.border} ${theme.glow} ${
+                                isBeingDragged
+                                  ? "opacity-40 scale-95 border-dashed border-indigo-400"
+                                  : "opacity-100"
+                              }`}>
+                              {/* 1. Header (Fixed 42px height): Title (2-lines max) & Priority Badge */}
+                              <div className="h-[42px] min-h-[42px] max-h-[42px] flex items-start justify-between gap-2 overflow-hidden">
+                                <h4
+                                  onClick={() => handleOpenEdit(task)}
+                                  className="text-xs sm:text-sm font-bold text-white hover:text-indigo-300 transition-colors leading-snug cursor-pointer line-clamp-2"
+                                  title={task.title}>
+                                  {task.title}
+                                </h4>
+                                <span
+                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 ${getPriorityBadge(task.priority)}`}>
+                                  {task.priority}
+                                </span>
+                              </div>
+
+                              {/* 2. Body (Fixed 36px height): Description */}
+                              <div className="h-[36px] min-h-[36px] max-h-[36px] overflow-hidden">
+                                {task.description ? (
+                                  <p className="text-xs text-slate-300/80 line-clamp-2 leading-relaxed">
+                                    {task.description}
+                                  </p>
+                                ) : (
+                                  <span className="text-[11px] text-slate-500 italic block">
+                                    Sin descripción adicional
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* 3. Metadata Tags (Fixed 26px height): Project & Dates */}
+                              <div className="h-[26px] min-h-[26px] max-h-[26px] flex items-center gap-1.5 text-[10px] pt-1.5 border-t border-[#222a3d]/60 overflow-hidden truncate">
+                                <span className="px-1.5 py-0.5 rounded bg-[#060e20] text-indigo-300 border border-[#222a3d] font-semibold truncate max-w-[105px]">
+                                  📁 {task.project}
+                                </span>
+
+                                {task.due_date && (
+                                  <span className="text-amber-300/90 flex items-center gap-0.5 shrink-0">
+                                    <span className="material-symbols-outlined text-[12px]">
+                                      schedule
+                                    </span>
+                                    {task.due_date}
+                                  </span>
+                                )}
+
+                                {task.completed_at && (
+                                  <span className="text-emerald-400 font-semibold truncate shrink-0">
+                                    ✓ {task.completed_at}
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* 4. Footer (Fixed 26px height): Assignee & Action Shortcuts */}
+                              <div className="h-[26px] min-h-[26px] max-h-[26px] flex items-center justify-between text-xs text-slate-400 pt-1">
+                                <div className="flex items-center gap-1.5 truncate">
+                                  <div className="w-5 h-5 rounded-full bg-indigo-900 border border-indigo-400/40 flex items-center justify-center text-[10px] font-bold text-indigo-200 shrink-0">
+                                    {task.assignee
+                                      ? task.assignee.charAt(0)
+                                      : "?"}
+                                  </div>
+                                  <span className="text-[11px] text-slate-300 font-medium truncate max-w-[110px]">
+                                    {task.assignee || "Sin asignar"}
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => handleOpenEdit(task)}
+                                    className="p-1 text-slate-400 hover:text-white transition-colors"
+                                    title="Editar tarea">
+                                    <span className="material-symbols-outlined text-[16px]">
+                                      edit
+                                    </span>
+                                  </button>
+                                  <button
+                                    onClick={() => openDeleteTaskModal(task)}
+                                    className="p-1 text-slate-400 hover:text-rose-400 transition-colors"
+                                    title="Eliminar tarea">
+                                    <span className="material-symbols-outlined text-[16px]">
+                                      delete
+                                    </span>
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : viewMode === "list" ? (
+            /* ----------------- 2. VISTA DE LISTA (COLORES FIJOS SÓLIDOS POR ESTADO SIN COLUMNA ESTADO) ----------------- */
+            <div className="bg-[#0b1326] rounded-2xl border border-[#222a3d] overflow-hidden shadow-lg flex flex-col">
+              {/* Table Status Bar & Legend */}
+              <div className="px-4 sm:px-5 py-3 bg-[#131b2e] border-b border-[#222a3d] flex items-center justify-between text-xs flex-wrap gap-3">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span className="text-slate-300 font-semibold flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-indigo-400 text-[18px]">
+                      table_rows
+                    </span>
+                    <span>
+                      Mostrando {tasks.length}{" "}
+                      {tasks.length === 1 ? "tarea" : "tareas"}
+                    </span>
+                  </span>
+
+                  {/* Status Color Indicators Legend */}
+                  <div className="flex items-center gap-3 text-[11px] font-bold pl-2 border-l border-[#2d3449]">
+                    <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-[#231a0b] text-amber-300 border border-amber-500/40">
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.8)]"></span>
+                      <span>Pendiente</span>
+                    </span>
+                    <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-[#0a233a] text-cyan-300 border border-cyan-500/40">
+                      <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 shadow-[0_0_6px_rgba(34,211,238,0.8)]"></span>
+                      <span>En Progreso</span>
+                    </span>
+                    <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-[#09281a] text-emerald-300 border border-emerald-500/40">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]"></span>
+                      <span>Completada</span>
                     </span>
                   </div>
+                </div>
 
-                  {/* Task Cards */}
-                  <div className="flex flex-col gap-3 overflow-y-auto">
-                    {colTasks.length === 0 ? (
-                      <div className="text-center py-12 text-xs text-slate-500 italic">
-                        Sin tareas en {colStatus.toLowerCase()}
-                      </div>
-                    ) : (
-                      colTasks.map((task) => (
+                {hasActiveFilters && (
+                  <button
+                    onClick={resetFilters}
+                    className="text-indigo-400 hover:underline text-xs font-semibold">
+                    Restablecer Filtros
+                  </button>
+                )}
+              </div>
+
+              {tasks.length === 0 ? (
+                <div className="text-center py-16 text-slate-500 italic flex flex-col items-center gap-2">
+                  <span className="material-symbols-outlined text-slate-600 text-[36px]">
+                    filter_list_off
+                  </span>
+                  <span>
+                    No se encontraron tareas con los filtros seleccionados.
+                  </span>
+                  <button
+                    onClick={resetFilters}
+                    className="text-indigo-400 hover:underline text-xs font-bold mt-1">
+                    Limpiar Filtros
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {/* 1. VISTA MÓVIL / RESPONSIVE (< md): Lista de tarjetas verticales completa sin recortes */}
+                  <div className="md:hidden flex flex-col divide-y divide-[#222a3d]/80">
+                    {tasks.map((task) => {
+                      const statusStyle = getTableRowStatusStyle(task.status);
+
+                      return (
                         <div
                           key={task.id}
-                          className="bg-[#131b2e] hover:bg-[#171f33] p-4 rounded-xl border border-[#222a3d] transition-all shadow-sm flex flex-col gap-2 group"
-                        >
+                          className={`p-3.5 flex flex-col gap-2.5 transition-all ${statusStyle.rowClass}`}>
+                          {/* Header: Title & Priority */}
                           <div className="flex items-start justify-between gap-2">
-                            <h4
-                              onClick={() => handleOpenEdit(task)}
-                              className="text-sm font-semibold text-white cursor-pointer hover:text-indigo-400 transition-colors"
-                            >
-                              {task.title}
-                            </h4>
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 ${getPriorityBadge(task.priority)}`}>
+                            <div className="flex items-center gap-2 flex-1 min-w-0">
+                              <span
+                                className={`w-3 h-3 rounded-full shrink-0 ${statusStyle.dotColor}`}
+                                title={`Estado: ${task.status}`}></span>
+                              <h4
+                                onClick={() => handleOpenEdit(task)}
+                                className={`text-xs sm:text-sm font-bold cursor-pointer transition-colors leading-snug break-words ${statusStyle.titleColor}`}>
+                                {task.title}
+                              </h4>
+                            </div>
+                            <span
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 ${getPriorityBadge(task.priority)}`}>
                               {task.priority}
                             </span>
                           </div>
 
-                          {task.description && (
-                            <p className="text-xs text-slate-400 line-clamp-2">{task.description}</p>
-                          )}
-
-                          <div className="flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-[#222a3d]">
-                            <span className="text-[11px] px-2 py-0.5 rounded bg-[#0b1326] text-indigo-300 font-medium border border-[#222a3d]">
-                              📁 {task.project || 'General'}
+                          {/* Metadata: Project & Dates */}
+                          <div className="flex flex-wrap items-center gap-2 text-[11px] pt-1 border-t border-black/20">
+                            <span
+                              className={`px-2 py-0.5 rounded font-bold text-[10px] border ${statusStyle.projectBadge}`}>
+                              📁 {task.project || "General"}
                             </span>
-                            <span className="font-medium text-slate-300">👤 {task.assignee}</span>
+
+                            {task.due_date && (
+                              <span
+                                className={`flex items-center gap-0.5 text-[10px] font-semibold ${statusStyle.dateColor}`}>
+                                <span className="material-symbols-outlined text-[12px]">
+                                  schedule
+                                </span>
+                                {task.due_date}
+                              </span>
+                            )}
+
+                            {task.completed_at && (
+                              <span className="text-emerald-400 font-bold text-[10px] flex items-center gap-0.5">
+                                <span className="material-symbols-outlined text-[12px]">
+                                  check_circle
+                                </span>
+                                {task.completed_at}
+                              </span>
+                            )}
                           </div>
 
-                          {task.due_date && (
-                            <div className="text-[11px] text-slate-400 flex items-center gap-1">
-                              <span>📅 Vence: {task.due_date}</span>
-                            </div>
-                          )}
-
-                          {/* Fast Action Buttons */}
-                          <div className="flex items-center justify-between pt-1 opacity-75 group-hover:opacity-100 transition-opacity">
-                            <div className="flex items-center gap-1">
-                              {colStatus !== 'Pendiente' && (
-                                <button
-                                  onClick={() => handleQuickStatusChange(task, 'Pendiente')}
-                                  className="text-[10px] px-2 py-0.5 rounded bg-[#222a3d] hover:bg-[#2d3449] text-amber-300"
-                                >
-                                  ← Pendiente
-                                </button>
-                              )}
-                              {colStatus !== 'En Progreso' && (
-                                <button
-                                  onClick={() => handleQuickStatusChange(task, 'En Progreso')}
-                                  className="text-[10px] px-2 py-0.5 rounded bg-[#222a3d] hover:bg-[#2d3449] text-cyan-300"
-                                >
-                                  {colStatus === 'Pendiente' ? 'En Progreso →' : '← En Progreso'}
-                                </button>
-                              )}
-                              {colStatus !== 'Completada' && (
-                                <button
-                                  onClick={() => handleQuickStatusChange(task, 'Completada')}
-                                  className="text-[10px] px-2 py-0.5 rounded bg-[#222a3d] hover:bg-[#2d3449] text-emerald-300"
-                                >
-                                  Completar ✓
-                                </button>
-                              )}
+                          {/* Footer: Assignee & Action Buttons */}
+                          <div className="flex items-center justify-between text-xs text-slate-300 pt-1 flex-wrap gap-2">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <div className="w-5 h-5 rounded-full bg-indigo-950 border border-indigo-400/40 flex items-center justify-center text-[10px] font-bold text-indigo-200 shrink-0">
+                                {task.assignee ? task.assignee.charAt(0) : "?"}
+                              </div>
+                              <span className="text-[11px] text-slate-200 font-medium truncate max-w-[140px]">
+                                {task.assignee || "Sin asignar"}
+                              </span>
                             </div>
 
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-1 shrink-0">
+                              {task.status !== "Completada" && (
+                                <button
+                                  onClick={() =>
+                                    handleStatusChange(task.id, "Completada")
+                                  }
+                                  className="p-1.5 rounded bg-emerald-500/20 hover:bg-emerald-500/40 text-emerald-300 transition-colors border border-emerald-500/40 flex items-center gap-1 text-[11px] font-bold"
+                                  title="Marcar como Completada">
+                                  <span className="material-symbols-outlined text-[14px]">
+                                    done
+                                  </span>
+                                  <span>Completar</span>
+                                </button>
+                              )}
                               <button
                                 onClick={() => handleOpenEdit(task)}
-                                className="p-1 text-slate-400 hover:text-white"
-                                title="Editar"
-                              >
-                                <span className="material-symbols-outlined text-[16px]">edit</span>
+                                className="p-1.5 text-slate-300 hover:text-white transition-colors"
+                                title="Editar tarea">
+                                <span className="material-symbols-outlined text-[16px]">
+                                  edit
+                                </span>
                               </button>
                               <button
-                                onClick={() => handleDelete(task.id)}
-                                className="p-1 text-slate-400 hover:text-rose-400"
-                                title="Eliminar"
-                              >
-                                <span className="material-symbols-outlined text-[16px]">delete</span>
+                                onClick={() => openDeleteTaskModal(task)}
+                                className="p-1.5 text-slate-400 hover:text-rose-400 transition-colors"
+                                title="Eliminar tarea">
+                                <span className="material-symbols-outlined text-[16px]">
+                                  delete
+                                </span>
                               </button>
                             </div>
                           </div>
                         </div>
-                      ))
-                    )}
+                      );
+                    })}
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : viewMode === 'list' ? (
-          /* 2. Table List View */
-          <div className="bg-[#060e20] rounded-xl border border-[#222a3d] overflow-hidden shadow-md">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-[#131b2e] text-slate-400 text-xs uppercase font-semibold border-b border-[#222a3d]">
-                <tr>
-                  <th className="py-3 px-4">Título</th>
-                  <th className="py-3 px-4">Proyecto</th>
-                  <th className="py-3 px-4">Responsable</th>
-                  <th className="py-3 px-4">Prioridad</th>
-                  <th className="py-3 px-4">Estado</th>
-                  <th className="py-3 px-4">Fecha Límite</th>
-                  <th className="py-3 px-4 text-right">Acciones</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#171f33]">
-                {tasks.map((task) => (
-                  <tr key={task.id} className="hover:bg-[#131b2e] transition-colors">
-                    <td className="py-3 px-4 font-semibold text-white">
-                      <span onClick={() => handleOpenEdit(task)} className="cursor-pointer hover:text-indigo-400">
-                        {task.title}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4">
-                      <span className="text-xs px-2 py-0.5 rounded bg-[#131b2e] text-indigo-300 border border-[#222a3d]">
-                        {task.project || 'General'}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-slate-300">{task.assignee}</td>
-                    <td className="py-3 px-4">
-                      <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${getPriorityBadge(task.priority)}`}>
-                        {task.priority}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4">
-                      <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
-                        task.status === 'Completada' ? 'bg-emerald-500/20 text-emerald-300' :
-                        task.status === 'En Progreso' ? 'bg-cyan-500/20 text-cyan-300' : 'bg-amber-500/20 text-amber-300'
-                      }`}>
-                        {task.status}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-slate-400 text-xs">{task.due_date || 'Sin fecha'}</td>
-                    <td className="py-3 px-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <button onClick={() => handleOpenEdit(task)} className="text-slate-400 hover:text-white">
-                          <span className="material-symbols-outlined text-[18px]">edit</span>
-                        </button>
-                        <button onClick={() => handleDelete(task.id)} className="text-slate-400 hover:text-rose-400">
-                          <span className="material-symbols-outlined text-[18px]">delete</span>
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          /* 3. Interactive Calendar View */
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Calendar Grid (8 cols) */}
-            <div className="lg:col-span-8 bg-[#060e20] rounded-2xl border border-[#222a3d] p-5 shadow-xl flex flex-col gap-4">
-              {/* Month Header controls */}
-              <div className="flex items-center justify-between pb-3 border-b border-[#222a3d]">
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setCalendarDate(new Date(currentYear, currentMonth - 1, 1))}
-                    className="p-1.5 rounded-lg bg-[#131b2e] hover:bg-[#222a3d] text-slate-300 transition-colors"
-                  >
-                    <span className="material-symbols-outlined text-[18px]">chevron_left</span>
-                  </button>
-                  <h3 className="text-base font-bold text-white min-w-[140px] text-center">
-                    {monthNames[currentMonth]} {currentYear}
-                  </h3>
-                  <button
-                    onClick={() => setCalendarDate(new Date(currentYear, currentMonth + 1, 1))}
-                    className="p-1.5 rounded-lg bg-[#131b2e] hover:bg-[#222a3d] text-slate-300 transition-colors"
-                  >
-                    <span className="material-symbols-outlined text-[18px]">chevron_right</span>
-                  </button>
-                </div>
-                <button
-                  onClick={() => {
-                    const now = new Date();
-                    setCalendarDate(now);
-                    setSelectedCalendarDay(now.getDate());
-                  }}
-                  className="px-3 py-1 bg-[#131b2e] hover:bg-[#222a3d] text-xs font-semibold text-slate-300 rounded-lg border border-[#222a3d]"
-                >
-                  Hoy
-                </button>
-              </div>
 
-              {/* Weekday headers */}
-              <div className="grid grid-cols-7 gap-1 text-center font-bold text-xs text-slate-400">
-                {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map(d => (
-                  <div key={d} className="py-1">{d}</div>
-                ))}
-              </div>
+                  {/* 2. VISTA ESCRITORIO (>= md): Tabla completa con scroll vertical y horizontal */}
+                  <div className="hidden md:block overflow-x-auto overflow-y-auto max-h-[calc(100vh-270px)] scroll-smooth">
+                    <table className="w-full text-left text-sm whitespace-nowrap">
+                      {/* Header: Sticky on scroll */}
+                      <thead className="bg-[#060e20] text-slate-300 text-xs uppercase font-bold border-b border-[#222a3d] sticky top-0 z-10">
+                        <tr>
+                          <th className="py-3.5 px-4">Tarea / Título</th>
+                          <th className="py-3.5 px-4">Proyecto</th>
+                          <th className="py-3.5 px-4">Responsable</th>
+                          <th className="py-3.5 px-4">Prioridad</th>
+                          <th className="py-3.5 px-4">Fecha Inicio</th>
+                          <th className="py-3.5 px-4">Fecha Límite</th>
+                          <th className="py-3.5 px-4">Fecha Completada</th>
+                          <th className="py-3.5 px-4 text-right">Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tasks.map((task) => {
+                          const statusStyle = getTableRowStatusStyle(
+                            task.status,
+                          );
 
-              {/* Days Grid */}
-              <div className="grid grid-cols-7 gap-1.5">
-                {calendarDays.map((item, index) => {
-                  if (!item.isCurrentMonth) {
-                    return <div key={index} className="min-h-[90px] rounded-lg bg-[#0b1326]/40 opacity-20"></div>;
-                  }
+                          return (
+                            <tr
+                              key={task.id}
+                              className={`transition-all ${statusStyle.rowClass}`}>
+                              {/* Title with Solid Status Indicator Dot */}
+                              <td className="py-3.5 px-4 max-w-[280px] truncate">
+                                <div className="flex items-center gap-2.5">
+                                  <span
+                                    className={`w-3 h-3 rounded-full shrink-0 ${statusStyle.dotColor}`}
+                                    title={`Estado: ${task.status}`}></span>
+                                  <span
+                                    onClick={() => handleOpenEdit(task)}
+                                    className={`cursor-pointer truncate transition-colors ${statusStyle.titleColor}`}
+                                    title={task.title}>
+                                    {task.title}
+                                  </span>
+                                </div>
+                              </td>
 
-                  const isSelected = item.day === selectedCalendarDay;
-                  const hasTasks = item.tasks && item.tasks.length > 0;
+                              {/* Project */}
+                              <td className="py-3.5 px-4">
+                                <span
+                                  className={`text-xs px-2.5 py-1 rounded-lg font-bold border ${statusStyle.projectBadge}`}>
+                                  {task.project || "General"}
+                                </span>
+                              </td>
 
-                  return (
-                    <div
-                      key={index}
-                      onClick={() => setSelectedCalendarDay(item.day)}
-                      className={`min-h-[90px] p-2 rounded-xl flex flex-col justify-between transition-all cursor-pointer border ${
-                        isSelected
-                          ? 'bg-[#131b2e] border-indigo-500 shadow-lg ring-1 ring-indigo-500'
-                          : 'bg-[#131b2e]/60 hover:bg-[#131b2e] border-[#222a3d]'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className={`text-xs font-bold ${isSelected ? 'text-indigo-400' : 'text-slate-300'}`}>
-                          {item.day}
-                        </span>
-                        {hasTasks && (
-                          <span className="w-2 h-2 rounded-full bg-cyan-400"></span>
-                        )}
-                      </div>
+                              {/* Assignee */}
+                              <td className="py-3.5 px-4 text-slate-200 font-medium">
+                                <div className="flex items-center gap-1.5">
+                                  <div className="w-5 h-5 rounded-full bg-indigo-950 border border-indigo-400/40 flex items-center justify-center text-[10px] font-bold text-indigo-200 shrink-0">
+                                    {task.assignee
+                                      ? task.assignee.charAt(0)
+                                      : "?"}
+                                  </div>
+                                  <span>{task.assignee}</span>
+                                </div>
+                              </td>
 
-                      {/* Task preview pills */}
-                      <div className="flex flex-col gap-1 mt-1 overflow-hidden">
-                        {item.tasks?.slice(0, 2).map((t) => (
-                          <div
-                            key={t.id}
-                            onClick={(e) => { e.stopPropagation(); handleOpenEdit(t); }}
-                            className={`text-[10px] px-1.5 py-0.5 rounded truncate font-medium ${
-                              t.status === 'Completada' ? 'bg-emerald-950 text-emerald-300' : 'bg-indigo-950 text-indigo-300'
-                            }`}
-                          >
-                            {t.title}
-                          </div>
-                        ))}
-                        {item.tasks?.length > 2 && (
-                          <span className="text-[9px] text-slate-400">+{item.tasks.length - 2} más</span>
-                        )}
-                      </div>
-                      <div className="h-0.5"></div>
-                    </div>
-                  );
-                })}
-              </div>
+                              {/* Priority */}
+                              <td className="py-3.5 px-4">
+                                <span
+                                  className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${getPriorityBadge(task.priority)}`}>
+                                  {task.priority}
+                                </span>
+                              </td>
+
+                              {/* Start Date */}
+                              <td
+                                className={`py-3.5 px-4 text-xs font-semibold ${statusStyle.dateColor}`}>
+                                {task.start_date || "—"}
+                              </td>
+
+                              {/* Due Date */}
+                              <td
+                                className={`py-3.5 px-4 text-xs font-semibold ${statusStyle.dateColor}`}>
+                                {task.due_date ? (
+                                  <span className="flex items-center gap-1">
+                                    <span className="material-symbols-outlined text-[13px] opacity-70">
+                                      event
+                                    </span>
+                                    {task.due_date}
+                                  </span>
+                                ) : (
+                                  "—"
+                                )}
+                              </td>
+
+                              {/* Completed At Date */}
+                              <td className="py-3.5 px-4 text-xs font-bold">
+                                {task.completed_at ? (
+                                  <span className="text-emerald-400 flex items-center gap-1">
+                                    <span className="material-symbols-outlined text-[15px]">
+                                      check_circle
+                                    </span>
+                                    {task.completed_at}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-500 font-normal">
+                                    —
+                                  </span>
+                                )}
+                              </td>
+
+                              {/* Action Buttons & Quick Status Switcher */}
+                              <td className="py-3.5 px-4 text-right">
+                                <div className="flex items-center justify-end gap-1.5">
+                                  {/* Quick complete button if not completed */}
+                                  {task.status !== "Completada" && (
+                                    <button
+                                      onClick={() =>
+                                        handleStatusChange(
+                                          task.id,
+                                          "Completada",
+                                        )
+                                      }
+                                      className="p-1 rounded bg-emerald-500/20 hover:bg-emerald-500/40 text-emerald-300 transition-colors border border-emerald-500/40"
+                                      title="Marcar como Completada">
+                                      <span className="material-symbols-outlined text-[16px]">
+                                        done
+                                      </span>
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => handleOpenEdit(task)}
+                                    className="p-1 text-slate-300 hover:text-white transition-colors"
+                                    title="Editar tarea">
+                                    <span className="material-symbols-outlined text-[16px]">
+                                      edit
+                                    </span>
+                                  </button>
+                                  <button
+                                    onClick={() => openDeleteTaskModal(task)}
+                                    className="p-1 text-slate-400 hover:text-rose-400 transition-colors"
+                                    title="Eliminar tarea">
+                                    <span className="material-symbols-outlined text-[16px]">
+                                      delete
+                                    </span>
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
             </div>
-
-            {/* Selected Day Agenda (4 cols) */}
-            <div className="lg:col-span-4 bg-[#060e20] rounded-2xl border border-[#222a3d] p-5 shadow-xl flex flex-col gap-4">
-              <div className="flex items-center justify-between pb-3 border-b border-[#222a3d]">
-                <div className="flex flex-col">
-                  <span className="text-xs text-indigo-400 font-bold uppercase tracking-wide">Agenda del Día</span>
-                  <span className="text-sm font-bold text-white">
-                    {selectedCalendarDay} de {monthNames[currentMonth]} {currentYear}
-                  </span>
-                </div>
-                <button
-                  onClick={() => handleOpenCreate(selectedDateString)}
-                  className="p-1.5 bg-[#4f46e5] hover:bg-[#4338ca] text-white rounded-lg text-xs flex items-center gap-1 font-semibold"
-                  title="Añadir tarea en esta fecha"
-                >
-                  <span className="material-symbols-outlined text-[16px]">add</span>
-                </button>
-              </div>
-
-              {/* Day Tasks List */}
-              <div className="flex flex-col gap-3 max-h-[450px] overflow-y-auto">
-                {selectedDayTasks.length === 0 ? (
-                  <div className="text-center py-12 text-xs text-slate-500 italic flex flex-col items-center gap-2">
-                    <span className="material-symbols-outlined text-slate-600 text-[32px]">event_available</span>
-                    <span>No hay tareas programadas para este día.</span>
+          ) : (
+            /* ----------------- 3. VISTA DE CALENDARIO INTERACTIVO ----------------- */
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-start">
+              {/* Calendar Grid (8 cols) */}
+              <div className="lg:col-span-8 bg-[#0b1326] rounded-2xl border border-[#222a3d] p-4 sm:p-5 shadow-lg flex flex-col gap-4">
+                <div className="flex items-center justify-between pb-3 border-b border-[#222a3d]">
+                  <div className="flex items-center gap-2">
                     <button
-                      onClick={() => handleOpenCreate(selectedDateString)}
-                      className="text-xs text-indigo-400 hover:underline mt-1 font-semibold"
-                    >
-                      + Programar una tarea aquí
+                      onClick={() =>
+                        setCalendarDate(
+                          new Date(currentYear, currentMonth - 1, 1),
+                        )
+                      }
+                      className="p-1.5 rounded-xl bg-[#131b2e] hover:bg-[#222a3d] text-slate-300 transition-colors">
+                      <span className="material-symbols-outlined text-[18px]">
+                        chevron_left
+                      </span>
+                    </button>
+                    <h3 className="text-sm sm:text-base font-bold text-white min-w-[140px] text-center">
+                      {monthNames[currentMonth]} {currentYear}
+                    </h3>
+                    <button
+                      onClick={() =>
+                        setCalendarDate(
+                          new Date(currentYear, currentMonth + 1, 1),
+                        )
+                      }
+                      className="p-1.5 rounded-xl bg-[#131b2e] hover:bg-[#222a3d] text-slate-300 transition-colors">
+                      <span className="material-symbols-outlined text-[18px]">
+                        chevron_right
+                      </span>
                     </button>
                   </div>
-                ) : (
-                  selectedDayTasks.map((task) => (
-                    <div
-                      key={task.id}
-                      className="p-3 bg-[#131b2e] hover:bg-[#171f33] rounded-xl border border-[#222a3d] transition-all flex flex-col gap-2"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <span
-                          onClick={() => handleOpenEdit(task)}
-                          className="text-xs font-semibold text-white cursor-pointer hover:text-indigo-400"
-                        >
-                          {task.title}
-                        </span>
-                        <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full border ${getPriorityBadge(task.priority)}`}>
-                          {task.priority}
-                        </span>
-                      </div>
+                  <button
+                    onClick={() => {
+                      const now = new Date();
+                      setCalendarDate(now);
+                      setSelectedCalendarDay(now.getDate());
+                    }}
+                    className="px-3 py-1 bg-[#131b2e] hover:bg-[#222a3d] text-xs font-semibold text-slate-300 rounded-xl border border-[#222a3d]">
+                    Hoy
+                  </button>
+                </div>
 
-                      <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1 border-t border-[#222a3d]">
-                        <span className="text-indigo-300">📁 {task.project || 'General'}</span>
-                        <span className="text-slate-300">👤 {task.assignee}</span>
+                {/* Weekday headers */}
+                <div className="grid grid-cols-7 gap-1 text-center font-bold text-xs text-slate-400">
+                  {["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"].map(
+                    (d) => (
+                      <div key={d} className="py-1">
+                        {d}
                       </div>
+                    ),
+                  )}
+                </div>
 
-                      <div className="flex items-center justify-between pt-1">
-                        <button
-                          onClick={() => handleQuickStatusChange(task, task.status === 'Completada' ? 'Pendiente' : 'Completada')}
-                          className={`text-[10px] px-2 py-0.5 rounded font-semibold ${
-                            task.status === 'Completada' ? 'bg-emerald-900/50 text-emerald-300' : 'bg-[#222a3d] text-slate-300 hover:text-emerald-300'
-                          }`}
-                        >
-                          {task.status === 'Completada' ? '✓ Completada' : 'Marcar Completada'}
-                        </button>
+                {/* Days Grid */}
+                <div className="grid grid-cols-7 gap-1.5">
+                  {calendarDays.map((item, index) => {
+                    if (!item.isCurrentMonth) {
+                      return (
+                        <div
+                          key={index}
+                          className="min-h-[75px] sm:min-h-[90px] rounded-xl bg-[#060e20]/40 opacity-20"></div>
+                      );
+                    }
 
-                        <button
-                          onClick={() => handleOpenEdit(task)}
-                          className="text-xs text-slate-400 hover:text-white"
-                        >
-                          Editar
-                        </button>
+                    const dayStr = `${currentYear}-${String(currentMonth + 1).padStart(2, "0")}-${String(item.day).padStart(2, "0")}`;
+                    const dayItemTasks = tasks.filter(
+                      (t) => t.due_date === dayStr || t.start_date === dayStr,
+                    );
+                    const isSelected = selectedCalendarDay === item.day;
+                    const isToday =
+                      new Date().toISOString().split("T")[0] === dayStr;
+
+                    return (
+                      <div
+                        key={index}
+                        onClick={() => setSelectedCalendarDay(item.day)}
+                        className={`min-h-[75px] sm:min-h-[90px] p-1.5 sm:p-2 rounded-xl border transition-all cursor-pointer flex flex-col justify-between ${
+                          isSelected
+                            ? "bg-[#17233d] border-indigo-400 ring-2 ring-indigo-500/40"
+                            : "bg-[#060e20] border-[#222a3d] hover:border-slate-500"
+                        }`}>
+                        <div className="flex items-center justify-between">
+                          <span
+                            className={`text-xs font-bold w-5 h-5 flex items-center justify-center rounded-full ${
+                              isToday
+                                ? "bg-indigo-600 text-white"
+                                : "text-slate-300"
+                            }`}>
+                            {item.day}
+                          </span>
+                          {dayItemTasks.length > 0 && (
+                            <span className="text-[10px] bg-indigo-900/60 text-indigo-300 px-1 rounded-full font-semibold">
+                              {dayItemTasks.length}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Chips */}
+                        <div className="flex flex-col gap-1 overflow-hidden mt-1">
+                          {dayItemTasks.slice(0, 2).map((t) => (
+                            <span
+                              key={t.id}
+                              className={`text-[9px] px-1 py-0.5 rounded truncate font-medium ${
+                                t.status === "Completada"
+                                  ? "bg-emerald-950 text-emerald-300"
+                                  : t.status === "En Progreso"
+                                    ? "bg-cyan-950 text-cyan-300"
+                                    : "bg-amber-950 text-amber-300"
+                              }`}>
+                              {t.title}
+                            </span>
+                          ))}
+                          {dayItemTasks.length > 2 && (
+                            <span className="text-[8px] text-slate-400">
+                              +{dayItemTasks.length - 2} más
+                            </span>
+                          )}
+                        </div>
                       </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Day Agenda Drawer (4 cols) */}
+              <div className="lg:col-span-4 bg-[#0b1326] rounded-2xl border border-[#222a3d] p-4 sm:p-5 shadow-lg flex flex-col gap-4">
+                <div className="flex items-center justify-between pb-3 border-b border-[#222a3d]">
+                  <div>
+                    <h3 className="text-sm font-bold text-white">
+                      Agenda: {selectedCalendarDay} de{" "}
+                      {monthNames[currentMonth]}
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      {dayTasks.length}{" "}
+                      {dayTasks.length === 1
+                        ? "tarea programada"
+                        : "tareas programadas"}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleOpenCreate(selectedDayFormatted)}
+                    className="p-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl"
+                    title="Añadir tarea en esta fecha">
+                    <span className="material-symbols-outlined text-[16px]">
+                      add
+                    </span>
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-3 overflow-y-auto max-h-[500px]">
+                  {dayTasks.length === 0 ? (
+                    <div className="text-center py-12 text-xs text-slate-500 italic">
+                      No hay tareas programadas para este día.
                     </div>
-                  ))
-                )}
+                  ) : (
+                    dayTasks.map((task) => (
+                      <div
+                        key={task.id}
+                        className="p-3 bg-[#060e20] border border-[#222a3d] rounded-xl flex flex-col gap-2 hover:border-slate-500 transition-colors">
+                        <div className="flex items-start justify-between gap-2">
+                          <h4
+                            onClick={() => handleOpenEdit(task)}
+                            className="text-xs font-bold text-white hover:text-indigo-300 cursor-pointer">
+                            {task.title}
+                          </h4>
+                          <span
+                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${getPriorityBadge(task.priority)}`}>
+                            {task.priority}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-slate-400">
+                          <span>👤 {task.assignee}</span>
+                          <span className="text-indigo-400 font-semibold">
+                            {task.status}
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        )}
-      </main>
+          )}
+        </main>
+      </div>
 
-      {/* Task Creation / Edit Modal */}
+      {/* =========================================================================
+          MODAL: CREAR / EDITAR TAREA (OPTIMIZADO RESPONSIVO)
+      ========================================================================= */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
-          <div className="bg-[#131b2e] border border-[#2d3449] rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl">
-            {/* Modal Header */}
-            <div className="px-6 py-4 bg-[#060e20] border-b border-[#222a3d] flex items-center justify-between">
-              <h3 className="text-base font-bold text-white">
-                {editingTask ? 'Editar Tarea' : 'Registrar Nueva Tarea'}
-              </h3>
-              <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-white">
-                ✕
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+          <div className="bg-[#0b1326] border border-[#222a3d] rounded-2xl sm:rounded-3xl w-full max-w-lg shadow-2xl flex flex-col max-h-[92vh] sm:max-h-[88vh] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header (Fixed) */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-[#222a3d] bg-[#0b1326] shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+                  <span className="material-symbols-outlined text-[20px]">
+                    {editingTask ? "edit_note" : "add_task"}
+                  </span>
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-bold text-white">
+                    {editingTask ? "Editar Tarea" : "Crear Nueva Tarea"}
+                  </h3>
+                  <p className="text-[10px] sm:text-[11px] text-slate-400">
+                    {editingTask
+                      ? "Modifica los datos y requerimientos"
+                      : "Completa los campos para registrar la tarea"}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsModalOpen(false)}
+                className="text-slate-400 hover:text-white p-1.5 rounded-xl hover:bg-[#131b2e] transition-colors"
+                title="Cerrar modal">
+                <span className="material-symbols-outlined text-xl">close</span>
               </button>
             </div>
 
-            {/* Form */}
-            <form onSubmit={handleSaveTask} className="p-6 flex flex-col gap-4">
-              <div>
-                <label className="text-xs font-semibold text-slate-300 uppercase block mb-1">Título de la Tarea *</label>
+            {/* Modal Body (Scrollable Form Fields) */}
+            <form
+              id="taskModalForm"
+              onSubmit={handleSaveTask}
+              className="p-4 sm:p-5 overflow-y-auto flex-1 flex flex-col gap-3.5 text-xs">
+              {/* Title */}
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-300">
+                  Título de la Tarea *
+                </label>
                 <input
                   type="text"
                   required
-                  placeholder="Ej: Implementar balanceador de carga Nginx"
+                  placeholder="ej. Actualizar diseño de la página de inicio"
                   value={formData.title}
-                  onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                  className="w-full bg-[#0b1326] text-white text-sm px-3 py-2 rounded-lg border border-[#2d3449] focus:outline-none focus:border-indigo-500"
+                  onChange={(e) =>
+                    setFormData({ ...formData, title: e.target.value })
+                  }
+                  className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 transition-colors"
                 />
               </div>
 
-              <div>
-                <label className="text-xs font-semibold text-slate-300 uppercase block mb-1">Descripción</label>
+              {/* Description */}
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-300">Descripción</label>
                 <textarea
-                  rows={2}
-                  placeholder="Detalles o requerimientos..."
+                  rows="3"
+                  placeholder="Detalles sobre lo que debe realizarse..."
                   value={formData.description}
-                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                  className="w-full bg-[#0b1326] text-white text-sm px-3 py-2 rounded-lg border border-[#2d3449] focus:outline-none focus:border-indigo-500"
-                />
+                  onChange={(e) =>
+                    setFormData({ ...formData, description: e.target.value })
+                  }
+                  className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 transition-colors resize-none"></textarea>
               </div>
 
               {/* Project & Assignee */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-semibold text-slate-300 uppercase block mb-1">Proyecto Vinculado</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="font-bold text-slate-300">Proyecto</label>
                   <select
                     value={formData.project}
-                    onChange={(e) => setFormData({ ...formData, project: e.target.value })}
-                    className="w-full bg-[#0b1326] text-white text-xs px-3 py-2 rounded-lg border border-[#2d3449] focus:outline-none cursor-pointer"
-                  >
-                    {projectList.map(p => <option key={p} value={p}>{p}</option>)}
+                    onChange={(e) =>
+                      setFormData({ ...formData, project: e.target.value })
+                    }
+                    className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 cursor-pointer">
+                    {projectList.map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
-                <div>
-                  <label className="text-xs font-semibold text-slate-300 uppercase block mb-1">Responsable</label>
+                <div className="flex flex-col gap-1">
+                  <label className="font-bold text-slate-300">
+                    Responsable
+                  </label>
                   <select
                     value={formData.assignee}
-                    onChange={(e) => setFormData({ ...formData, assignee: e.target.value })}
-                    className="w-full bg-[#0b1326] text-white text-xs px-3 py-2 rounded-lg border border-[#2d3449] focus:outline-none cursor-pointer"
-                  >
-                    {teamMembers.map(m => <option key={m} value={m}>{m}</option>)}
+                    onChange={(e) =>
+                      setFormData({ ...formData, assignee: e.target.value })
+                    }
+                    className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 cursor-pointer">
+                    {users.length > 0 ? (
+                      users.map((u) => (
+                        <option key={u.id} value={u.name}>
+                          {u.name} ({u.role})
+                        </option>
+                      ))
+                    ) : (
+                      <option value="Administrador Principal">
+                        Administrador Principal
+                      </option>
+                    )}
                   </select>
                 </div>
               </div>
 
               {/* Priority & Status */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-semibold text-slate-300 uppercase block mb-1">Prioridad</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="font-bold text-slate-300">Prioridad</label>
                   <select
                     value={formData.priority}
-                    onChange={(e) => setFormData({ ...formData, priority: e.target.value })}
-                    className="w-full bg-[#0b1326] text-white text-xs px-3 py-2 rounded-lg border border-[#2d3449] focus:outline-none cursor-pointer"
-                  >
-                    {priorities.map(p => <option key={p} value={p}>{p}</option>)}
+                    onChange={(e) =>
+                      setFormData({ ...formData, priority: e.target.value })
+                    }
+                    className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 cursor-pointer">
+                    {priorities.map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
-                <div>
-                  <label className="text-xs font-semibold text-slate-300 uppercase block mb-1">Estado</label>
+                <div className="flex flex-col gap-1">
+                  <label className="font-bold text-slate-300">Estado</label>
                   <select
                     value={formData.status}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                    className="w-full bg-[#0b1326] text-white text-xs px-3 py-2 rounded-lg border border-[#2d3449] focus:outline-none cursor-pointer"
-                  >
-                    {statuses.map(s => <option key={s} value={s}>{s}</option>)}
+                    onChange={(e) =>
+                      setFormData({ ...formData, status: e.target.value })
+                    }
+                    className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 cursor-pointer">
+                    {statuses.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
 
-              {/* Due Date */}
+              {/* Dates */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="font-bold text-slate-300">
+                    Fecha de Inicio
+                  </label>
+                  <input
+                    type="date"
+                    value={formData.start_date}
+                    onChange={(e) =>
+                      setFormData({ ...formData, start_date: e.target.value })
+                    }
+                    className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="font-bold text-slate-300">
+                    Fecha Límite
+                  </label>
+                  <input
+                    type="date"
+                    value={formData.due_date}
+                    onChange={(e) =>
+                      setFormData({ ...formData, due_date: e.target.value })
+                    }
+                    className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+            </form>
+
+            {/* Modal Footer (Fixed at bottom) */}
+            <div className="px-5 py-3.5 border-t border-[#222a3d] bg-[#070e1e] flex items-center justify-between gap-2 shrink-0">
               <div>
-                <label className="text-xs font-semibold text-slate-300 uppercase block mb-1">Fecha Límite</label>
-                <input
-                  type="date"
-                  value={formData.due_date}
-                  onChange={(e) => setFormData({ ...formData, due_date: e.target.value })}
-                  className="w-full bg-[#0b1326] text-white text-xs px-3 py-2 rounded-lg border border-[#2d3449] focus:outline-none"
-                />
+                {editingTask && (
+                  <button
+                    type="button"
+                    onClick={() => openDeleteTaskModal(editingTask)}
+                    className="px-3 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-bold transition-all flex items-center gap-1 active:scale-95"
+                    title="Eliminar esta tarea">
+                    <span className="material-symbols-outlined text-[15px]">
+                      delete
+                    </span>
+                    <span className="hidden sm:inline">Eliminar</span>
+                  </button>
+                )}
               </div>
 
-              {/* Actions */}
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#222a3d]">
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 bg-[#222a3d] hover:bg-[#2d3449] text-slate-300 text-xs font-semibold rounded-lg transition-colors"
-                >
+                  className="px-4 py-2 rounded-xl bg-[#131b2e] hover:bg-[#222a3d] text-slate-300 font-semibold text-xs transition-colors">
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-[#4f46e5] hover:bg-[#4338ca] text-white text-xs font-bold rounded-lg transition-all shadow-md shadow-indigo-500/30"
-                >
-                  {editingTask ? 'Guardar Cambios' : 'Crear Tarea'}
+                  form="taskModalForm"
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white font-bold text-xs shadow-md shadow-indigo-600/30 transition-all active:scale-95">
+                  {editingTask ? "Guardar Cambios" : "Crear Tarea"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: CONFIRMACIÓN DE ELIMINACIÓN MODERNO (TAREAS Y USUARIOS)
+      ========================================================================= */}
+      {deleteModal.isOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-[#0b1326] border border-rose-500/30 rounded-2xl sm:rounded-3xl w-full max-w-md p-5 sm:p-6 shadow-2xl flex flex-col gap-4 text-center animate-in zoom-in-95 duration-150 relative overflow-hidden">
+            {/* Ambient subtle red glow */}
+            <div className="absolute -top-16 -right-16 w-36 h-36 bg-rose-600/20 rounded-full blur-2xl pointer-events-none"></div>
+
+            <div className="flex flex-col items-center gap-2 pt-2">
+              <div className="w-14 h-14 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 shadow-lg shadow-rose-500/10">
+                <span className="material-symbols-outlined text-3xl">
+                  delete_forever
+                </span>
+              </div>
+              <h3 className="text-lg font-bold text-white tracking-tight">
+                {deleteModal.type === "task"
+                  ? "¿Eliminar Tarea?"
+                  : "¿Eliminar Usuario?"}
+              </h3>
+              <p className="text-xs text-slate-300 leading-relaxed max-w-sm">
+                ¿Estás seguro de que deseas eliminar permanentemente:
+              </p>
+              <div className="px-3 py-2 bg-[#060e20] border border-[#222a3d] rounded-xl text-xs font-bold text-rose-300 max-w-full break-words">
+                "{deleteModal.title}"
+              </div>
+              {deleteModal.subtitle && (
+                <span className="text-[11px] text-slate-400">
+                  {deleteModal.subtitle}
+                </span>
+              )}
+              <p className="text-[11px] text-slate-500 italic mt-1">
+                Esta acción no se puede deshacer.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-center gap-3 pt-3 border-t border-[#222a3d]">
+              <button
+                type="button"
+                onClick={() =>
+                  setDeleteModal({
+                    isOpen: false,
+                    type: "task",
+                    id: null,
+                    title: "",
+                    subtitle: "",
+                  })
+                }
+                className="flex-1 py-2.5 px-4 rounded-xl bg-[#131b2e] hover:bg-[#222a3d] text-slate-300 text-xs font-bold transition-colors">
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-all active:scale-95 flex items-center justify-center gap-1.5">
+                <span className="material-symbols-outlined text-[16px]">
+                  delete
+                </span>
+                <span>Sí, Eliminar</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: GESTIÓN DE USUARIOS (SOLO ADMIN)
+      ========================================================================= */}
+      {isUserManagementOpen && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-[#0b1326] border border-[#222a3d] rounded-3xl w-full max-w-2xl p-5 sm:p-6 shadow-2xl flex flex-col gap-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-[#222a3d]">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-amber-400">
+                  manage_accounts
+                </span>
+                <div>
+                  <h3 className="text-base font-bold text-white">
+                    Gestión de Usuarios y Roles
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Administra el equipo, crea cuentas y asigna permisos
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsUserManagementOpen(false)}
+                className="text-slate-400 hover:text-white p-1">
+                <span className="material-symbols-outlined text-xl">close</span>
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-slate-300 font-semibold">
+                Total de Usuarios: <strong>{users.length}</strong>
+              </span>
+              <button
+                onClick={handleOpenCreateUser}
+                className="px-3 py-1.5 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-md shadow-amber-600/20">
+                <span className="material-symbols-outlined text-[16px]">
+                  person_add
+                </span>
+                <span>Nuevo Usuario</span>
+              </button>
+            </div>
+
+            {/* Users Table */}
+            <div className="overflow-x-auto border border-[#222a3d] rounded-2xl">
+              <table className="w-full text-left text-xs whitespace-nowrap">
+                <thead className="bg-[#060e20] text-slate-400 uppercase font-semibold border-b border-[#222a3d]">
+                  <tr>
+                    <th className="py-2.5 px-3">Usuario</th>
+                    <th className="py-2.5 px-3">Correo</th>
+                    <th className="py-2.5 px-3">Rol Asignado</th>
+                    <th className="py-2.5 px-3">Admin</th>
+                    <th className="py-2.5 px-3 text-right">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#171f33]">
+                  {users.map((u) => (
+                    <tr
+                      key={u.id}
+                      className="hover:bg-[#131b2e] transition-colors">
+                      <td className="py-2.5 px-3 font-semibold text-white flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-full bg-indigo-900 flex items-center justify-center font-bold text-indigo-200">
+                          {u.name.charAt(0)}
+                        </div>
+                        <span>{u.name}</span>
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-300">{u.email}</td>
+                      <td className="py-2.5 px-3">
+                        <span className="px-2 py-0.5 rounded bg-[#060e20] border border-[#222a3d] text-indigo-300 font-semibold">
+                          {u.role}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3">
+                        {u.is_admin ? (
+                          <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
+                            Sí
+                          </span>
+                        ) : (
+                          <span className="text-slate-500">No</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            onClick={() => handleOpenEditUser(u)}
+                            className="p-1 text-slate-400 hover:text-white"
+                            title="Editar usuario o rol">
+                            <span className="material-symbols-outlined text-[16px]">
+                              edit
+                            </span>
+                          </button>
+                          {u.id !== currentUser.id && (
+                            <button
+                              onClick={() => openDeleteUserModal(u)}
+                              className="p-1 text-slate-400 hover:text-rose-400"
+                              title="Eliminar usuario">
+                              <span className="material-symbols-outlined text-[16px]">
+                                delete
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: CREAR / EDITAR USUARIO (SOLO ADMIN)
+      ========================================================================= */}
+      {isUserFormOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-[#0b1326] border border-[#222a3d] rounded-3xl w-full max-w-md p-5 sm:p-6 shadow-2xl flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-[#222a3d]">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-amber-400">
+                  {editingUser ? "edit" : "person_add"}
+                </span>
+                <h3 className="text-base font-bold text-white">
+                  {editingUser ? "Editar Usuario / Rol" : "Crear Nuevo Usuario"}
+                </h3>
+              </div>
+              <button
+                onClick={() => setIsUserFormOpen(false)}
+                className="text-slate-400 hover:text-white p-1">
+                <span className="material-symbols-outlined text-xl">close</span>
+              </button>
+            </div>
+
+            <form
+              onSubmit={handleSaveUser}
+              className="flex flex-col gap-3.5 text-xs">
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-300">
+                  Nombre Completo *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="ej. Sofía Ramos"
+                  value={userFormData.name}
+                  onChange={(e) =>
+                    setUserFormData({ ...userFormData, name: e.target.value })
+                  }
+                  className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-300">
+                  Correo Electrónico *
+                </label>
+                <input
+                  type="email"
+                  required
+                  placeholder="ej. sofia@taskpulse.io"
+                  value={userFormData.email}
+                  onChange={(e) =>
+                    setUserFormData({ ...userFormData, email: e.target.value })
+                  }
+                  className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-300">
+                  {editingUser
+                    ? "Nueva Contraseña (dejar en blanco para conservar actual)"
+                    : "Contraseña Inicial *"}
+                </label>
+                <input
+                  type="password"
+                  required={!editingUser}
+                  placeholder={editingUser ? "••••••••" : "Mínimo 6 caracteres"}
+                  value={userFormData.password}
+                  onChange={(e) =>
+                    setUserFormData({
+                      ...userFormData,
+                      password: e.target.value,
+                    })
+                  }
+                  className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-300">
+                  Rol en el Equipo
+                </label>
+                <select
+                  value={userFormData.role}
+                  onChange={(e) => {
+                    const selectedRole = e.target.value;
+                    setUserFormData({
+                      ...userFormData,
+                      role: selectedRole,
+                      is_admin:
+                        selectedRole === "Administrador"
+                          ? true
+                          : userFormData.is_admin,
+                    });
+                  }}
+                  className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500">
+                  {availableRoles.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="isAdminCheckbox"
+                  checked={
+                    userFormData.is_admin ||
+                    userFormData.role === "Administrador"
+                  }
+                  onChange={(e) =>
+                    setUserFormData({
+                      ...userFormData,
+                      is_admin: e.target.checked,
+                    })
+                  }
+                  className="rounded border-[#2d3449] bg-[#060e20] text-indigo-600 focus:ring-indigo-500"
+                />
+                <label
+                  htmlFor="isAdminCheckbox"
+                  className="font-semibold text-slate-300 cursor-pointer">
+                  Otorgar permisos de Administrador
+                </label>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#222a3d]">
+                <button
+                  type="button"
+                  onClick={() => setIsUserFormOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-[#131b2e] hover:bg-[#222a3d] text-slate-300 font-semibold">
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white font-bold shadow-md shadow-amber-600/30">
+                  {editingUser ? "Actualizar Usuario" : "Crear Usuario"}
                 </button>
               </div>
             </form>
@@ -807,12 +2481,58 @@ export default function App() {
         </div>
       )}
 
-      {/* Floating Toast */}
-      {toast && (
-        <div className={`fixed bottom-6 right-6 px-4 py-3 rounded-xl shadow-2xl border text-xs font-semibold flex items-center gap-2 z-50 ${
-          toast.type === 'error' ? 'bg-rose-950 text-rose-200 border-rose-800' : 'bg-emerald-950 text-emerald-200 border-emerald-800'
-        }`}>
-          <span>{toast.message}</span>
+      {/* =========================================================================
+          MODAL: CREAR PROYECTO
+      ========================================================================= */}
+      {isNewProjectModalOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#0b1326] border border-[#222a3d] rounded-3xl w-full max-w-sm p-5 shadow-2xl flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-2 border-b border-[#222a3d]">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <span className="material-symbols-outlined text-indigo-400">
+                  create_new_folder
+                </span>
+                <span>Nuevo Proyecto</span>
+              </h3>
+              <button
+                onClick={() => setIsNewProjectModalOpen(false)}
+                className="text-slate-400 hover:text-white p-1">
+                <span className="material-symbols-outlined text-xl">close</span>
+              </button>
+            </div>
+
+            <form
+              onSubmit={handleCreateProject}
+              className="flex flex-col gap-3 text-xs">
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-300">
+                  Nombre del Proyecto
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="ej. Expansión Móvil Q4"
+                  value={newProjectName}
+                  onChange={(e) => setNewProjectName(e.target.value)}
+                  className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsNewProjectModalOpen(false)}
+                  className="px-3.5 py-1.5 rounded-xl bg-[#131b2e] hover:bg-[#222a3d] text-slate-300 font-semibold">
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold">
+                  Crear Proyecto
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

@@ -1,20 +1,22 @@
 import os
+import uuid
 from typing import List, Optional
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException, Query, status
+from fastapi import FastAPI, Depends, HTTPException, Query, status, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from .database import engine, Base, get_db, SessionLocal
-from .models import Task
+from .models import Task, User
 from .schemas import (
     TaskCreate, TaskUpdate, TaskStatusUpdate,
-    TaskResponse, TaskStatsResponse
+    TaskResponse, TaskStatsResponse,
+    UserCreate, UserUpdate, UserResponse, UserLogin, LoginResponse
 )
-from .controllers import task_controller
-from .seed import seed_initial_tasks
+from .controllers import task_controller, user_controller
+from .seed import seed_initial_data
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -22,7 +24,7 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
-        seed_initial_tasks(db)
+        seed_initial_data(db)
     finally:
         db.close()
     yield
@@ -44,7 +46,62 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ----------------- API ENDPOINTS -----------------
+# ----------------- AUTH & USER MANAGEMENT ENDPOINTS -----------------
+
+@app.post("/api/auth/login", response_model=LoginResponse, tags=["Autenticación"])
+def login(credentials: UserLogin, db: Session = Depends(get_db)):
+    """Iniciar sesión con correo electrónico y contraseña."""
+    user = user_controller.authenticate(db, credentials)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciales incorrectas o usuario inactivo"
+        )
+    
+    # Generar token de sesión
+    token = f"taskpulse_{user.id}_{uuid.uuid4().hex[:16]}"
+    return {
+        "user": user,
+        "token": token,
+        "message": f"Bienvenido, {user.name}"
+    }
+
+@app.get("/api/auth/users", response_model=List[UserResponse], tags=["Usuarios"])
+def get_users(db: Session = Depends(get_db)):
+    """Listar todos los usuarios registrados en el sistema."""
+    return user_controller.get_users(db)
+
+@app.post("/api/auth/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED, tags=["Usuarios"])
+def create_user(user_in: UserCreate, db: Session = Depends(get_db)):
+    """Crear un nuevo usuario y asignar su rol (Función de Administrador)."""
+    try:
+        return user_controller.create_user(db, user_in)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+@app.put("/api/auth/users/{user_id}", response_model=UserResponse, tags=["Usuarios"])
+def update_user(user_id: int, user_in: UserUpdate, db: Session = Depends(get_db)):
+    """Actualizar datos, rol o contraseña de un usuario (Función de Administrador)."""
+    try:
+        user = user_controller.update_user(db, user_id, user_in)
+        if not user:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        return user
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+@app.delete("/api/auth/users/{user_id}", tags=["Usuarios"])
+def delete_user(user_id: int, db: Session = Depends(get_db)):
+    """Eliminar un usuario del sistema (Función de Administrador)."""
+    try:
+        success = user_controller.delete_user(db, user_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        return {"status": "success", "message": f"Usuario {user_id} eliminado exitosamente"}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+# ----------------- TASK ENDPOINTS -----------------
 
 @app.get("/api/tasks", response_model=List[TaskResponse], tags=["Tareas"])
 def get_tasks(
@@ -53,16 +110,20 @@ def get_tasks(
     priority: Optional[str] = Query(None, description="Baja, Media, Alta, Urgente"),
     project: Optional[str] = Query(None, description="Filtrar por proyecto"),
     assignee: Optional[str] = Query(None, description="Filtrar por responsable"),
+    from_date: Optional[str] = Query(None, description="Fecha límite desde (YYYY-MM-DD)"),
+    to_date: Optional[str] = Query(None, description="Fecha límite hasta (YYYY-MM-DD)"),
     db: Session = Depends(get_db)
 ):
-    """Listar todas las tareas con filtros opcionales."""
+    """Listar todas las tareas con filtros opcionales de estado, prioridad, proyecto y fechas."""
     return task_controller.get_tasks(
         db=db,
         search=search,
         status=status,
         priority=priority,
         project=project,
-        assignee=assignee
+        assignee=assignee,
+        from_date=from_date,
+        to_date=to_date
     )
 
 @app.get("/api/tasks/{task_id}", response_model=TaskResponse, tags=["Tareas"])
