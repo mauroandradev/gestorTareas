@@ -1,10 +1,12 @@
-from .schemas import (
+from .user import (
     UserBase,
     UserCreate,
     UserUpdate,
     UserResponse,
     UserLogin,
-    LoginResponse,
+    LoginResponse
+)
+from .task import (
     TaskBase,
     TaskCreate,
     TaskUpdate,
