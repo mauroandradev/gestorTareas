@@ -141,4 +141,21 @@ export const TaskAPI = {
     if (!res.ok) throw new Error("Error al eliminar tarea");
     return res.json();
   },
+
+  // Eliminar proyecto completo y sus tareas
+  deleteProject: async (projectName) => {
+    const res = await fetch(
+      `${API_BASE_URL}/projects/${encodeURIComponent(projectName)}`,
+      {
+        method: "DELETE",
+      }
+    );
+    if (!res.ok) {
+      const err = await res
+        .json()
+        .catch(() => ({ detail: "Error al eliminar el proyecto" }));
+      throw new Error(err.detail || "Error al eliminar el proyecto");
+    }
+    return res.json();
+  },
 };
