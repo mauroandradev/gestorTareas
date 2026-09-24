@@ -139,6 +139,13 @@ class TaskService:
         return True
 
     @staticmethod
+    def delete_project(db: Session, project_name: str) -> int:
+        """Delete all tasks matching the specified project name."""
+        deleted_count = db.query(Task).filter(Task.project == project_name).delete()
+        db.commit()
+        return deleted_count
+
+    @staticmethod
     def get_stats(db: Session) -> Dict[str, Any]:
         """Compute aggregated statistics for tasks and projects."""
         tasks = db.query(Task).all()

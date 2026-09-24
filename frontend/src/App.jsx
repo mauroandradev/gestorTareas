@@ -103,16 +103,32 @@ export default function App() {
     "Rediseño Web",
     "Infraestructura",
   ];
-  const [customProjects, setCustomProjects] = useState([]);
+  const [deletedProjects, setDeletedProjects] = useState(() => {
+    try {
+      const saved = localStorage.getItem("taskpulse_deleted_projects");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
 
-  // Merge unique project names
+  const [customProjects, setCustomProjects] = useState(() => {
+    try {
+      const saved = localStorage.getItem("taskpulse_custom_projects");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // Merge unique project names excluding any deleted projects
   const projectList = Array.from(
     new Set([
       ...defaultProjects,
       ...customProjects,
       ...(stats.proyectos || []),
     ]),
-  );
+  ).filter((p) => !deletedProjects.includes(p));
 
   const priorities = ["Baja", "Media", "Alta", "Urgente"];
   const statuses = ["Pendiente", "En Progreso", "Completada"];
@@ -351,6 +367,16 @@ export default function App() {
     });
   };
 
+  const openDeleteProjectModal = (projectName, taskCount = 0) => {
+    setDeleteModal({
+      isOpen: true,
+      type: "project",
+      id: projectName,
+      title: projectName,
+      subtitle: `Se eliminarán permanentemente el proyecto y todas sus tareas asociadas (${taskCount} tareas).`,
+    });
+  };
+
   const openDeleteUserModal = (user) => {
     if (user.id === currentUser.id) {
       showToast("No puedes eliminar tu propia cuenta de sesión", "error");
@@ -374,6 +400,33 @@ export default function App() {
         if (isModalOpen && editingTask?.id === deleteModal.id) {
           setIsModalOpen(false);
         }
+        loadData();
+      } else if (deleteModal.type === "project") {
+        await TaskAPI.deleteProject(deleteModal.id);
+        setDeletedProjects((prev) => {
+          const updated = Array.from(new Set([...prev, deleteModal.id]));
+          try {
+            localStorage.setItem(
+              "taskpulse_deleted_projects",
+              JSON.stringify(updated),
+            );
+          } catch {}
+          return updated;
+        });
+        setCustomProjects((prev) => {
+          const updated = prev.filter((p) => p !== deleteModal.id);
+          try {
+            localStorage.setItem(
+              "taskpulse_custom_projects",
+              JSON.stringify(updated),
+            );
+          } catch {}
+          return updated;
+        });
+        if (currentProject === deleteModal.id) {
+          setCurrentProject("Todos");
+        }
+        showToast(`Proyecto "${deleteModal.id}" eliminado correctamente`);
         loadData();
       } else if (deleteModal.type === "user") {
         await AuthAPI.deleteUser(deleteModal.id);
@@ -473,7 +526,26 @@ export default function App() {
       showToast("El proyecto ya existe", "error");
       return;
     }
-    setCustomProjects((prev) => [...prev, cleanName]);
+    setDeletedProjects((prev) => {
+      const updated = prev.filter((p) => p !== cleanName);
+      try {
+        localStorage.setItem(
+          "taskpulse_deleted_projects",
+          JSON.stringify(updated),
+        );
+      } catch {}
+      return updated;
+    });
+    setCustomProjects((prev) => {
+      const updated = [...prev.filter((p) => p !== cleanName), cleanName];
+      try {
+        localStorage.setItem(
+          "taskpulse_custom_projects",
+          JSON.stringify(updated),
+        );
+      } catch {}
+      return updated;
+    });
     setCurrentProject(cleanName);
     setNewProjectName("");
     setIsNewProjectModalOpen(false);
@@ -1043,31 +1115,51 @@ export default function App() {
                 const projCount = stats.project_counts?.[proj] ?? 0;
 
                 return (
-                  <button
+                  <div
                     key={proj}
-                    onClick={() => {
-                      setCurrentProject(proj);
-                      setIsMobileMenuOpen(false);
-                    }}
-                    className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all ${
+                    className={`group w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-all ${
                       isSelected
                         ? "bg-indigo-600 text-white font-bold shadow-md shadow-indigo-600/20"
                         : "text-slate-300 hover:bg-[#131b2e]"
                     }`}>
-                    <div className="flex items-center gap-2 truncate">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCurrentProject(proj);
+                        setIsMobileMenuOpen(false);
+                      }}
+                      className="flex items-center gap-2 truncate flex-1 text-left">
                       <span
                         className={`w-2 h-2 rounded-full shrink-0 ${isSelected ? "bg-white" : "bg-indigo-400"}`}></span>
                       <span className="truncate">{proj}</span>
+                    </button>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
+                          isSelected
+                            ? "bg-white/20 text-white"
+                            : "bg-[#171f33] text-slate-400"
+                        }`}>
+                        {projCount}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openDeleteProjectModal(proj, projCount);
+                        }}
+                        className={`p-1 rounded-lg transition-all ${
+                          isSelected
+                            ? "text-white/80 hover:text-white hover:bg-white/20"
+                            : "text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 md:opacity-0 md:group-hover:opacity-100"
+                        }`}
+                        title={`Eliminar proyecto "${proj}"`}>
+                        <span className="material-symbols-outlined text-[15px]">
+                          delete
+                        </span>
+                      </button>
                     </div>
-                    <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold shrink-0 ${
-                        isSelected
-                          ? "bg-white/20 text-white"
-                          : "bg-[#171f33] text-slate-400"
-                      }`}>
-                      {projCount}
-                    </span>
-                  </button>
+                  </div>
                 );
               })}
             </div>
@@ -2179,7 +2271,9 @@ export default function App() {
               <h3 className="text-lg font-bold text-white tracking-tight">
                 {deleteModal.type === "task"
                   ? "¿Eliminar Tarea?"
-                  : "¿Eliminar Usuario?"}
+                  : deleteModal.type === "project"
+                    ? "¿Eliminar Proyecto y sus Tareas?"
+                    : "¿Eliminar Usuario?"}
               </h3>
               <p className="text-xs text-slate-300 leading-relaxed max-w-sm">
                 ¿Estás seguro de que deseas eliminar permanentemente:
