@@ -3,11 +3,12 @@ from sqlalchemy.orm import Session
 from ..models.user import User
 from ..models.task import Task
 from ..models.role import Role
+from ..models.project import Project
 from ..core.security import hash_password
 
 
 def seed_initial_data(db: Session) -> None:
-    """Seed initial administrator user, roles, and sample tasks if tables are empty."""
+    """Seed initial administrator user, roles, projects, and sample tasks if tables are empty."""
     # 1. Seed initial Roles if empty
     if db.query(Role).count() == 0:
         default_roles = [
@@ -40,7 +41,21 @@ def seed_initial_data(db: Session) -> None:
         db.commit()
         print("[OK] Cuenta de Administrador inicial creada: admin@taskpulse.io / admin123")
 
-    # 3. Seed initial tasks if table is empty
+    # 3. Seed initial Projects if table is empty
+    if db.query(Project).count() == 0:
+        initial_projects = [
+            ("Q3 Lanzamiento", "Lanzamiento y despliegue del producto para el tercer trimestre", "Administrador Principal", "Administrador Principal"),
+            ("Rediseño Web", "Modernización completa de interfaces de usuario y experiencia visual", "Administrador Principal", "Administrador Principal"),
+            ("Soporte al Cliente", "Gestión de solicitudes, resolución de dudas y tickets técnicos", "Administrador Principal", "Administrador Principal"),
+            ("Infraestructura", "Mantenimiento de servidores, bases de datos y seguridad", "Administrador Principal", "Administrador Principal"),
+        ]
+        for name, desc, owner, members in initial_projects:
+            proj_obj = Project(name=name, description=desc, owner_name=owner, members=members)
+            db.add(proj_obj)
+        db.commit()
+        print("[OK] Proyectos iniciales cargados exitosamente.")
+
+    # 4. Seed initial tasks if table is empty
     if db.query(Task).count() == 0:
         today = datetime.now()
         initial_tasks = [

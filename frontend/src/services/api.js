@@ -150,28 +150,134 @@ export const TaskAPI = {
   },
 
   // Renombrar proyecto y sus tareas asociadas
-  renameProject: async (projectName, newName) => {
+  renameProject: async (projectName, newName, currentUser, isAdmin) => {
+    return ProjectAPI.updateProject(
+      projectName,
+      { new_name: newName, name: newName },
+      currentUser,
+      isAdmin
+    );
+  },
+
+  // Eliminar proyecto completo y sus tareas
+  deleteProject: async (projectName, currentUser, isAdmin) => {
+    return ProjectAPI.deleteProject(projectName, currentUser, isAdmin);
+  },
+};
+
+export const ProjectAPI = {
+  // Obtener lista completa de proyectos con permisos
+  getProjects: async (options = {}) => {
+    const params = new URLSearchParams();
+    if (options.user_name) params.append("user_name", options.user_name);
+    if (options.is_admin !== undefined)
+      params.append("is_admin", String(options.is_admin));
+
+    const queryStr = params.toString() ? `?${params.toString()}` : "";
+    const res = await fetch(`${API_BASE_URL}/projects${queryStr}`);
+    if (!res.ok) throw new Error("Error al obtener lista de proyectos");
+    return res.json();
+  },
+
+  // Crear nuevo proyecto con dueño y miembros
+  createProject: async (projectData, creatorName) => {
+    const params = new URLSearchParams();
+    if (creatorName) params.append("creator_name", creatorName);
+
+    const queryStr = params.toString() ? `?${params.toString()}` : "";
+    const res = await fetch(`${API_BASE_URL}/projects${queryStr}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(projectData),
+    });
+    if (!res.ok) {
+      const err = await res
+        .json()
+        .catch(() => ({ detail: "Error al crear proyecto" }));
+      throw new Error(err.detail || "Error al crear proyecto");
+    }
+    return res.json();
+  },
+
+  // Actualizar proyecto (nombre, descripción, dueño, miembros)
+  updateProject: async (projectName, projectData, currentUser, isAdmin) => {
+    const params = new URLSearchParams();
+    if (currentUser) params.append("current_user", currentUser);
+    if (isAdmin !== undefined) params.append("is_admin", String(isAdmin));
+
+    const queryStr = params.toString() ? `?${params.toString()}` : "";
     const res = await fetch(
-      `${API_BASE_URL}/projects/${encodeURIComponent(projectName)}`,
+      `${API_BASE_URL}/projects/${encodeURIComponent(projectName)}${queryStr}`,
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ new_name: newName }),
+        body: JSON.stringify(projectData),
       }
     );
     if (!res.ok) {
       const err = await res
         .json()
-        .catch(() => ({ detail: "Error al renombrar el proyecto" }));
-      throw new Error(err.detail || "Error al renombrar el proyecto");
+        .catch(() => ({ detail: "Error al actualizar proyecto" }));
+      throw new Error(err.detail || "Error al actualizar proyecto");
+    }
+    return res.json();
+  },
+
+  // Agregar miembro al proyecto
+  addMember: async (projectName, memberName, currentUser, isAdmin) => {
+    const params = new URLSearchParams();
+    if (currentUser) params.append("current_user", currentUser);
+    if (isAdmin !== undefined) params.append("is_admin", String(isAdmin));
+
+    const queryStr = params.toString() ? `?${params.toString()}` : "";
+    const res = await fetch(
+      `${API_BASE_URL}/projects/${encodeURIComponent(projectName)}/members${queryStr}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ member_name: memberName }),
+      }
+    );
+    if (!res.ok) {
+      const err = await res
+        .json()
+        .catch(() => ({ detail: "Error al agregar miembro al proyecto" }));
+      throw new Error(err.detail || "Error al agregar miembro al proyecto");
+    }
+    return res.json();
+  },
+
+  // Remover miembro del proyecto
+  removeMember: async (projectName, memberName, currentUser, isAdmin) => {
+    const params = new URLSearchParams();
+    if (currentUser) params.append("current_user", currentUser);
+    if (isAdmin !== undefined) params.append("is_admin", String(isAdmin));
+
+    const queryStr = params.toString() ? `?${params.toString()}` : "";
+    const res = await fetch(
+      `${API_BASE_URL}/projects/${encodeURIComponent(projectName)}/members/${encodeURIComponent(memberName)}${queryStr}`,
+      {
+        method: "DELETE",
+      }
+    );
+    if (!res.ok) {
+      const err = await res
+        .json()
+        .catch(() => ({ detail: "Error al remover miembro del proyecto" }));
+      throw new Error(err.detail || "Error al remover miembro del proyecto");
     }
     return res.json();
   },
 
   // Eliminar proyecto completo y sus tareas
-  deleteProject: async (projectName) => {
+  deleteProject: async (projectName, currentUser, isAdmin) => {
+    const params = new URLSearchParams();
+    if (currentUser) params.append("current_user", currentUser);
+    if (isAdmin !== undefined) params.append("is_admin", String(isAdmin));
+
+    const queryStr = params.toString() ? `?${params.toString()}` : "";
     const res = await fetch(
-      `${API_BASE_URL}/projects/${encodeURIComponent(projectName)}`,
+      `${API_BASE_URL}/projects/${encodeURIComponent(projectName)}${queryStr}`,
       {
         method: "DELETE",
       }
