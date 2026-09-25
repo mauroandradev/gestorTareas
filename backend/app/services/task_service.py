@@ -139,6 +139,18 @@ class TaskService:
         return True
 
     @staticmethod
+    def rename_project(db: Session, old_name: str, new_name: str) -> int:
+        """Rename all tasks associated with old_name to new_name."""
+        old_clean = old_name.strip()
+        new_clean = new_name.strip()
+        if not new_clean:
+            raise ValueError("El nuevo nombre del proyecto no puede estar vacío")
+        
+        updated_count = db.query(Task).filter(Task.project == old_clean).update({Task.project: new_clean})
+        db.commit()
+        return updated_count
+
+    @staticmethod
     def delete_project(db: Session, project_name: str) -> int:
         """Delete all tasks matching the specified project name."""
         deleted_count = db.query(Task).filter(Task.project == project_name).delete()

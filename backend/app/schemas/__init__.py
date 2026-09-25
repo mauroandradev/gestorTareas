@@ -14,6 +14,15 @@ from .task import (
     TaskResponse,
     TaskStatsResponse
 )
+from .role import (
+    RoleBase,
+    RoleCreate,
+    RoleUpdate,
+    RoleResponse
+)
+from .project import (
+    ProjectUpdate
+)
 
 __all__ = [
     "UserBase",
@@ -27,5 +36,10 @@ __all__ = [
     "TaskUpdate",
     "TaskStatusUpdate",
     "TaskResponse",
-    "TaskStatsResponse"
+    "TaskStatsResponse",
+    "RoleBase",
+    "RoleCreate",
+    "RoleUpdate",
+    "RoleResponse",
+    "ProjectUpdate"
 ]

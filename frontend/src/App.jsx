@@ -1,20 +1,27 @@
 import React, { useState, useEffect } from "react";
-import { TaskAPI, AuthAPI } from "./services/api";
+import { TaskAPI, AuthAPI, RoleAPI } from "./services/api";
 
 export default function App() {
   // ----------------- AUTHENTICATION STATE -----------------
-  const [currentUser, setCurrentUser] = useState(() => {
-    const saved = localStorage.getItem("taskpulse_user");
-    return saved ? JSON.parse(saved) : null;
-  });
+  const [currentUser, setCurrentUser] = useState(null);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState("");
 
+  // Purge any residual items in localStorage
+  useEffect(() => {
+    try {
+      localStorage.removeItem("taskpulse_user");
+      localStorage.removeItem("taskpulse_deleted_projects");
+      localStorage.removeItem("taskpulse_custom_projects");
+    } catch {}
+  }, []);
+
   // ----------------- MAIN APP STATE -----------------
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
+  const [roles, setRoles] = useState([]);
   const [stats, setStats] = useState({
     total: 0,
     pendientes: 0,
@@ -69,12 +76,16 @@ export default function App() {
     due_date: "",
   });
 
-  // Project Creation Modal State
+  // Project Creation & Edit Modal State
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
+  const [isEditProjectModalOpen, setIsEditProjectModalOpen] = useState(false);
+  const [editingProjectOldName, setEditingProjectOldName] = useState("");
+  const [editingProjectNewName, setEditingProjectNewName] = useState("");
 
-  // User Management Modal State (Admin Only)
+  // User & Roles Management Modal State (Admin Only)
   const [isUserManagementOpen, setIsUserManagementOpen] = useState(false);
+  const [adminTab, setAdminTab] = useState("users"); // 'users' | 'roles'
   const [isUserFormOpen, setIsUserFormOpen] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [userFormData, setUserFormData] = useState({
@@ -85,10 +96,18 @@ export default function App() {
     is_admin: false,
   });
 
+  // Role Form Modal State (Admin Only)
+  const [isRoleFormOpen, setIsRoleFormOpen] = useState(false);
+  const [editingRole, setEditingRole] = useState(null);
+  const [roleFormData, setRoleFormData] = useState({
+    name: "",
+    description: "",
+  });
+
   // Delete Confirmation Modal State (Custom UI Modal)
   const [deleteModal, setDeleteModal] = useState({
     isOpen: false,
-    type: "task", // 'task' | 'user'
+    type: "task", // 'task' | 'user' | 'project' | 'role'
     id: null,
     title: "",
     subtitle: "",
@@ -103,23 +122,8 @@ export default function App() {
     "Rediseño Web",
     "Infraestructura",
   ];
-  const [deletedProjects, setDeletedProjects] = useState(() => {
-    try {
-      const saved = localStorage.getItem("taskpulse_deleted_projects");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [customProjects, setCustomProjects] = useState(() => {
-    try {
-      const saved = localStorage.getItem("taskpulse_custom_projects");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [deletedProjects, setDeletedProjects] = useState([]);
+  const [customProjects, setCustomProjects] = useState([]);
 
   // Merge unique project names excluding any deleted projects
   const projectList = Array.from(
@@ -132,15 +136,18 @@ export default function App() {
 
   const priorities = ["Baja", "Media", "Alta", "Urgente"];
   const statuses = ["Pendiente", "En Progreso", "Completada"];
-  const availableRoles = [
-    "Administrador",
-    "Líder de Proyecto",
-    "Desarrollador",
-    "Diseñador UI/UX",
-    "QA Engineer",
-    "DevOps Engineer",
-    "Miembro",
-  ];
+  const availableRoles =
+    roles.length > 0
+      ? roles.map((r) => r.name)
+      : [
+          "Administrador",
+          "Líder de Proyecto",
+          "Desarrollador",
+          "Diseñador UI/UX",
+          "QA Engineer",
+          "DevOps Engineer",
+          "Miembro",
+        ];
 
   // ----------------- DATE RANGE CALCULATION -----------------
   const getDateRange = () => {
@@ -187,7 +194,7 @@ export default function App() {
       setLoading(true);
       const dateParams = getDateRange();
 
-      const [taskList, statsData, usersData] = await Promise.all([
+      const [taskList, statsData, usersData, rolesData] = await Promise.all([
         TaskAPI.getTasks({
           search,
           status: statusFilter,
@@ -198,6 +205,7 @@ export default function App() {
         }),
         TaskAPI.getStats(),
         AuthAPI.getUsers().catch(() => []),
+        RoleAPI.getRoles().catch(() => []),
       ]);
 
       let finalTasks = taskList || [];
@@ -210,6 +218,7 @@ export default function App() {
       }
 
       setTasks(finalTasks);
+      setRoles(rolesData || []);
       setStats(
         statsData || {
           total: 0,
@@ -270,7 +279,6 @@ export default function App() {
       setAuthError("");
       const data = await AuthAPI.login(loginEmail, loginPassword);
       setCurrentUser(data.user);
-      localStorage.setItem("taskpulse_user", JSON.stringify(data.user));
       showToast(`¡Bienvenido de nuevo, ${data.user.name}!`);
     } catch (err) {
       setAuthError(err.message || "Credenciales incorrectas");
@@ -281,7 +289,6 @@ export default function App() {
 
   const handleLogout = () => {
     setCurrentUser(null);
-    localStorage.removeItem("taskpulse_user");
     showToast("Sesión cerrada correctamente");
   };
 
@@ -356,6 +363,117 @@ export default function App() {
     }
   };
 
+  // ----------------- PROJECT EDIT HANDLERS -----------------
+  const handleOpenEditProject = (projectName) => {
+    setEditingProjectOldName(projectName);
+    setEditingProjectNewName(projectName);
+    setIsEditProjectModalOpen(true);
+  };
+
+  const handleSaveRenameProject = async (e) => {
+    e.preventDefault();
+    const oldName = editingProjectOldName;
+    const newName = editingProjectNewName.trim();
+    if (!newName) {
+      showToast("El nombre del proyecto no puede estar vacío", "error");
+      return;
+    }
+    if (newName === oldName) {
+      setIsEditProjectModalOpen(false);
+      return;
+    }
+    if (projectList.includes(newName)) {
+      showToast("Ya existe otro proyecto con ese nombre", "error");
+      return;
+    }
+
+    try {
+      await TaskAPI.renameProject(oldName, newName);
+      setCustomProjects((prev) => {
+        const updated = prev.map((p) => (p === oldName ? newName : p));
+        if (!updated.includes(newName)) updated.push(newName);
+        return updated;
+      });
+
+      setDeletedProjects((prev) => {
+        return prev.filter((p) => p !== newName);
+      });
+
+      if (currentProject === oldName) {
+        setCurrentProject(newName);
+      }
+      setIsEditProjectModalOpen(false);
+      showToast(`Proyecto renombrado a "${newName}"`);
+      loadData();
+    } catch (err) {
+      showToast(err.message || "Error al renombrar el proyecto", "error");
+    }
+  };
+
+  // ----------------- ROLE MANAGEMENT HANDLERS -----------------
+  const handleOpenCreateRole = () => {
+    setEditingRole(null);
+    setRoleFormData({ name: "", description: "" });
+    setIsRoleFormOpen(true);
+  };
+
+  const handleOpenEditRole = (role) => {
+    setEditingRole(role);
+    setRoleFormData({
+      name: role.name,
+      description: role.description || "",
+    });
+    setIsRoleFormOpen(true);
+  };
+
+  const handleSaveRole = async (e) => {
+    e.preventDefault();
+    const nameClean = roleFormData.name.trim();
+    if (!nameClean) {
+      showToast("El nombre del rol es obligatorio", "error");
+      return;
+    }
+
+    try {
+      if (editingRole) {
+        await RoleAPI.updateRole(editingRole.id, {
+          name: nameClean,
+          description: roleFormData.description,
+        });
+        showToast("Rol actualizado correctamente");
+      } else {
+        await RoleAPI.createRole({
+          name: nameClean,
+          description: roleFormData.description,
+        });
+        showToast("Nuevo rol creado exitosamente");
+      }
+      setIsRoleFormOpen(false);
+      const [updatedRoles, updatedUsers] = await Promise.all([
+        RoleAPI.getRoles().catch(() => []),
+        AuthAPI.getUsers().catch(() => []),
+      ]);
+      setRoles(updatedRoles);
+      setUsers(updatedUsers);
+    } catch (err) {
+      showToast(err.message || "Error al guardar el rol", "error");
+    }
+  };
+
+  const openDeleteRoleModal = (role) => {
+    if (role.name.toLowerCase() === "administrador") {
+      showToast("No se puede eliminar el rol Administrador", "error");
+      return;
+    }
+    setDeleteModal({
+      isOpen: true,
+      type: "role",
+      id: role.id,
+      title: role.name,
+      subtitle: `Los usuarios asignados a este rol (${role.user_count || 0} usuarios) pasarán al rol 'Miembro'.`,
+    });
+  };
+
   // ----------------- DELETE MODAL HANDLERS (MODAL PERSONALIZADO) -----------------
   const openDeleteTaskModal = (task) => {
     setDeleteModal({
@@ -403,31 +521,22 @@ export default function App() {
         loadData();
       } else if (deleteModal.type === "project") {
         await TaskAPI.deleteProject(deleteModal.id);
-        setDeletedProjects((prev) => {
-          const updated = Array.from(new Set([...prev, deleteModal.id]));
-          try {
-            localStorage.setItem(
-              "taskpulse_deleted_projects",
-              JSON.stringify(updated),
-            );
-          } catch {}
-          return updated;
-        });
-        setCustomProjects((prev) => {
-          const updated = prev.filter((p) => p !== deleteModal.id);
-          try {
-            localStorage.setItem(
-              "taskpulse_custom_projects",
-              JSON.stringify(updated),
-            );
-          } catch {}
-          return updated;
-        });
+        setDeletedProjects((prev) => Array.from(new Set([...prev, deleteModal.id])));
+        setCustomProjects((prev) => prev.filter((p) => p !== deleteModal.id));
         if (currentProject === deleteModal.id) {
           setCurrentProject("Todos");
         }
         showToast(`Proyecto "${deleteModal.id}" eliminado correctamente`);
         loadData();
+      } else if (deleteModal.type === "role") {
+        await RoleAPI.deleteRole(deleteModal.id);
+        showToast("Rol eliminado correctamente");
+        const [updatedRoles, updatedUsers] = await Promise.all([
+          RoleAPI.getRoles().catch(() => []),
+          AuthAPI.getUsers().catch(() => []),
+        ]);
+        setRoles(updatedRoles);
+        setUsers(updatedUsers);
       } else if (deleteModal.type === "user") {
         await AuthAPI.deleteUser(deleteModal.id);
         showToast("Usuario eliminado correctamente");
@@ -526,26 +635,8 @@ export default function App() {
       showToast("El proyecto ya existe", "error");
       return;
     }
-    setDeletedProjects((prev) => {
-      const updated = prev.filter((p) => p !== cleanName);
-      try {
-        localStorage.setItem(
-          "taskpulse_deleted_projects",
-          JSON.stringify(updated),
-        );
-      } catch {}
-      return updated;
-    });
-    setCustomProjects((prev) => {
-      const updated = [...prev.filter((p) => p !== cleanName), cleanName];
-      try {
-        localStorage.setItem(
-          "taskpulse_custom_projects",
-          JSON.stringify(updated),
-        );
-      } catch {}
-      return updated;
-    });
+    setDeletedProjects((prev) => prev.filter((p) => p !== cleanName));
+    setCustomProjects((prev) => [...prev.filter((p) => p !== cleanName), cleanName]);
     setCurrentProject(cleanName);
     setNewProjectName("");
     setIsNewProjectModalOpen(false);
@@ -1142,6 +1233,22 @@ export default function App() {
                         }`}>
                         {projCount}
                       </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenEditProject(proj);
+                        }}
+                        className={`p-1 rounded-lg transition-all ${
+                          isSelected
+                            ? "text-white/80 hover:text-white hover:bg-white/20"
+                            : "text-slate-500 hover:text-amber-300 hover:bg-amber-500/10 md:opacity-0 md:group-hover:opacity-100"
+                        }`}
+                        title={`Modificar/Renombrar proyecto "${proj}"`}>
+                        <span className="material-symbols-outlined text-[15px]">
+                          edit
+                        </span>
+                      </button>
                       <button
                         type="button"
                         onClick={(e) => {
@@ -2273,7 +2380,9 @@ export default function App() {
                   ? "¿Eliminar Tarea?"
                   : deleteModal.type === "project"
                     ? "¿Eliminar Proyecto y sus Tareas?"
-                    : "¿Eliminar Usuario?"}
+                    : deleteModal.type === "role"
+                      ? "¿Eliminar Rol del Equipo?"
+                      : "¿Eliminar Usuario?"}
               </h3>
               <p className="text-xs text-slate-300 leading-relaxed max-w-sm">
                 ¿Estás seguro de que deseas eliminar permanentemente:
@@ -2347,85 +2456,193 @@ export default function App() {
               </button>
             </div>
 
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-slate-300 font-semibold">
-                Total de Usuarios: <strong>{users.length}</strong>
-              </span>
+            {/* Navigation Tabs inside Admin Modal */}
+            <div className="flex items-center gap-2 border-b border-[#222a3d] pb-2">
               <button
-                onClick={handleOpenCreateUser}
-                className="px-3 py-1.5 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-md shadow-amber-600/20">
-                <span className="material-symbols-outlined text-[16px]">
-                  person_add
-                </span>
-                <span>Nuevo Usuario</span>
+                type="button"
+                onClick={() => setAdminTab("users")}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  adminTab === "users"
+                    ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                    : "text-slate-400 hover:text-white bg-[#131b2e]"
+                }`}>
+                <span className="material-symbols-outlined text-[16px]">group</span>
+                <span>Usuarios ({users.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setAdminTab("roles")}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  adminTab === "roles"
+                    ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                    : "text-slate-400 hover:text-white bg-[#131b2e]"
+                }`}>
+                <span className="material-symbols-outlined text-[16px]">badge</span>
+                <span>Roles del Equipo ({roles.length})</span>
               </button>
             </div>
 
-            {/* Users Table */}
-            <div className="overflow-x-auto border border-[#222a3d] rounded-2xl">
-              <table className="w-full text-left text-xs whitespace-nowrap">
-                <thead className="bg-[#060e20] text-slate-400 uppercase font-semibold border-b border-[#222a3d]">
-                  <tr>
-                    <th className="py-2.5 px-3">Usuario</th>
-                    <th className="py-2.5 px-3">Correo</th>
-                    <th className="py-2.5 px-3">Rol Asignado</th>
-                    <th className="py-2.5 px-3">Admin</th>
-                    <th className="py-2.5 px-3 text-right">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#171f33]">
-                  {users.map((u) => (
-                    <tr
-                      key={u.id}
-                      className="hover:bg-[#131b2e] transition-colors">
-                      <td className="py-2.5 px-3 font-semibold text-white flex items-center gap-2">
-                        <div className="w-6 h-6 rounded-full bg-indigo-900 flex items-center justify-center font-bold text-indigo-200">
-                          {u.name.charAt(0)}
-                        </div>
-                        <span>{u.name}</span>
-                      </td>
-                      <td className="py-2.5 px-3 text-slate-300">{u.email}</td>
-                      <td className="py-2.5 px-3">
-                        <span className="px-2 py-0.5 rounded bg-[#060e20] border border-[#222a3d] text-indigo-300 font-semibold">
-                          {u.role}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3">
-                        {u.is_admin ? (
-                          <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
-                            Sí
-                          </span>
-                        ) : (
-                          <span className="text-slate-500">No</span>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            onClick={() => handleOpenEditUser(u)}
-                            className="p-1 text-slate-400 hover:text-white"
-                            title="Editar usuario o rol">
-                            <span className="material-symbols-outlined text-[16px]">
-                              edit
+            {/* TAB: USUARIOS */}
+            {adminTab === "users" && (
+              <>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-slate-300 font-semibold">
+                    Total de Usuarios: <strong>{users.length}</strong>
+                  </span>
+                  <button
+                    onClick={handleOpenCreateUser}
+                    className="px-3 py-1.5 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-md shadow-amber-600/20">
+                    <span className="material-symbols-outlined text-[16px]">
+                      person_add
+                    </span>
+                    <span>Nuevo Usuario</span>
+                  </button>
+                </div>
+
+                {/* Users Table */}
+                <div className="overflow-x-auto border border-[#222a3d] rounded-2xl">
+                  <table className="w-full text-left text-xs whitespace-nowrap">
+                    <thead className="bg-[#060e20] text-slate-400 uppercase font-semibold border-b border-[#222a3d]">
+                      <tr>
+                        <th className="py-2.5 px-3">Usuario</th>
+                        <th className="py-2.5 px-3">Correo</th>
+                        <th className="py-2.5 px-3">Rol Asignado</th>
+                        <th className="py-2.5 px-3">Admin</th>
+                        <th className="py-2.5 px-3 text-right">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#171f33]">
+                      {users.map((u) => (
+                        <tr
+                          key={u.id}
+                          className="hover:bg-[#131b2e] transition-colors">
+                          <td className="py-2.5 px-3 font-semibold text-white flex items-center gap-2">
+                            <div className="w-6 h-6 rounded-full bg-indigo-900 flex items-center justify-center font-bold text-indigo-200">
+                              {u.name.charAt(0)}
+                            </div>
+                            <span>{u.name}</span>
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-300">{u.email}</td>
+                          <td className="py-2.5 px-3">
+                            <span className="px-2 py-0.5 rounded bg-[#060e20] border border-[#222a3d] text-indigo-300 font-semibold">
+                              {u.role}
                             </span>
-                          </button>
-                          {u.id !== currentUser.id && (
-                            <button
-                              onClick={() => openDeleteUserModal(u)}
-                              className="p-1 text-slate-400 hover:text-rose-400"
-                              title="Eliminar usuario">
-                              <span className="material-symbols-outlined text-[16px]">
-                                delete
+                          </td>
+                          <td className="py-2.5 px-3">
+                            {u.is_admin ? (
+                              <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
+                                Sí
                               </span>
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                            ) : (
+                              <span className="text-slate-500">No</span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => handleOpenEditUser(u)}
+                                className="p-1 text-slate-400 hover:text-white"
+                                title="Editar usuario o rol">
+                                <span className="material-symbols-outlined text-[16px]">
+                                  edit
+                                </span>
+                              </button>
+                              {u.id !== currentUser.id && (
+                                <button
+                                  onClick={() => openDeleteUserModal(u)}
+                                  className="p-1 text-slate-400 hover:text-rose-400"
+                                  title="Eliminar usuario">
+                                  <span className="material-symbols-outlined text-[16px]">
+                                    delete
+                                  </span>
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+
+            {/* TAB: ROLES */}
+            {adminTab === "roles" && (
+              <>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-slate-300 font-semibold">
+                    Total de Roles: <strong>{roles.length}</strong>
+                  </span>
+                  <button
+                    onClick={handleOpenCreateRole}
+                    className="px-3 py-1.5 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-md shadow-indigo-600/20">
+                    <span className="material-symbols-outlined text-[16px]">
+                      add_circle
+                    </span>
+                    <span>Nuevo Rol</span>
+                  </button>
+                </div>
+
+                {/* Roles Table */}
+                <div className="overflow-x-auto border border-[#222a3d] rounded-2xl">
+                  <table className="w-full text-left text-xs whitespace-nowrap">
+                    <thead className="bg-[#060e20] text-slate-400 uppercase font-semibold border-b border-[#222a3d]">
+                      <tr>
+                        <th className="py-2.5 px-3">Nombre del Rol</th>
+                        <th className="py-2.5 px-3">Descripción</th>
+                        <th className="py-2.5 px-3">Usuarios Asignados</th>
+                        <th className="py-2.5 px-3 text-right">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#171f33]">
+                      {roles.map((r) => (
+                        <tr
+                          key={r.id}
+                          className="hover:bg-[#131b2e] transition-colors">
+                          <td className="py-2.5 px-3 font-semibold text-white flex items-center gap-2">
+                            <span className="material-symbols-outlined text-indigo-400 text-[18px]">
+                              badge
+                            </span>
+                            <span className="font-bold">{r.name}</span>
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-400 max-w-xs truncate">
+                            {r.description || "Sin descripción"}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <span className="px-2 py-0.5 rounded-full bg-[#060e20] border border-[#222a3d] text-indigo-300 font-bold">
+                              {r.user_count || 0} usuarios
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => handleOpenEditRole(r)}
+                                className="p-1 text-slate-400 hover:text-white"
+                                title="Editar nombre / descripción del rol">
+                                <span className="material-symbols-outlined text-[16px]">
+                                  edit
+                                </span>
+                              </button>
+                              {r.name.toLowerCase() !== "administrador" && (
+                                <button
+                                  onClick={() => openDeleteRoleModal(r)}
+                                  className="p-1 text-slate-400 hover:text-rose-400"
+                                  title="Eliminar rol">
+                                  <span className="material-symbols-outlined text-[16px]">
+                                    delete
+                                  </span>
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -2576,6 +2793,83 @@ export default function App() {
       )}
 
       {/* =========================================================================
+          MODAL: CREAR / EDITAR ROL (SOLO ADMIN)
+      ========================================================================= */}
+      {isRoleFormOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-[#0b1326] border border-[#222a3d] rounded-3xl w-full max-w-md p-5 sm:p-6 shadow-2xl flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-[#222a3d]">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-indigo-400">
+                  badge
+                </span>
+                <h3 className="text-base font-bold text-white">
+                  {editingRole ? "Editar Rol" : "Crear Nuevo Rol"}
+                </h3>
+              </div>
+              <button
+                onClick={() => setIsRoleFormOpen(false)}
+                className="text-slate-400 hover:text-white p-1">
+                <span className="material-symbols-outlined text-xl">close</span>
+              </button>
+            </div>
+
+            <form
+              onSubmit={handleSaveRole}
+              className="flex flex-col gap-3.5 text-xs">
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-300">
+                  Nombre del Rol *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="ej. Diseñador 3D / DevOps"
+                  value={roleFormData.name}
+                  onChange={(e) =>
+                    setRoleFormData({ ...roleFormData, name: e.target.value })
+                  }
+                  className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-300">
+                  Descripción del Rol (Opcional)
+                </label>
+                <textarea
+                  rows="3"
+                  placeholder="Describe las principales responsabilidades..."
+                  value={roleFormData.description}
+                  onChange={(e) =>
+                    setRoleFormData({
+                      ...roleFormData,
+                      description: e.target.value,
+                    })
+                  }
+                  className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 resize-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#222a3d]">
+                <button
+                  type="button"
+                  onClick={() => setIsRoleFormOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-[#131b2e] hover:bg-[#222a3d] text-slate-300 font-semibold">
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold shadow-md shadow-indigo-600/30">
+                  {editingRole ? "Guardar Cambios" : "Crear Rol"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
           MODAL: CREAR PROYECTO
       ========================================================================= */}
       {isNewProjectModalOpen && (
@@ -2600,7 +2894,7 @@ export default function App() {
               className="flex flex-col gap-3 text-xs">
               <div className="flex flex-col gap-1">
                 <label className="font-bold text-slate-300">
-                  Nombre del Proyecto
+                  Nombre del Proyecto *
                 </label>
                 <input
                   type="text"
@@ -2623,6 +2917,70 @@ export default function App() {
                   type="submit"
                   className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold">
                   Crear Proyecto
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: MODIFICAR / RENOMBRAR PROYECTO
+      ========================================================================= */}
+      {isEditProjectModalOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#0b1326] border border-[#222a3d] rounded-3xl w-full max-w-sm p-5 shadow-2xl flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-2 border-b border-[#222a3d]">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <span className="material-symbols-outlined text-amber-400">
+                  edit_note
+                </span>
+                <span>Modificar Proyecto</span>
+              </h3>
+              <button
+                onClick={() => setIsEditProjectModalOpen(false)}
+                className="text-slate-400 hover:text-white p-1">
+                <span className="material-symbols-outlined text-xl">close</span>
+              </button>
+            </div>
+
+            <form
+              onSubmit={handleSaveRenameProject}
+              className="flex flex-col gap-3 text-xs">
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-400">
+                  Proyecto Actual
+                </label>
+                <div className="p-2.5 rounded-xl bg-[#060e20] border border-[#222a3d] text-slate-300 font-semibold">
+                  {editingProjectOldName}
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-300">
+                  Nuevo Nombre del Proyecto *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="ej. Rediseño Web 2.0"
+                  value={editingProjectNewName}
+                  onChange={(e) => setEditingProjectNewName(e.target.value)}
+                  className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditProjectModalOpen(false)}
+                  className="px-3.5 py-1.5 rounded-xl bg-[#131b2e] hover:bg-[#222a3d] text-slate-300 font-semibold">
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold shadow-md shadow-amber-600/30">
+                  Guardar Cambios
                 </button>
               </div>
             </form>

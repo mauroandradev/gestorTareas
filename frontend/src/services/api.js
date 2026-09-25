@@ -142,6 +142,25 @@ export const TaskAPI = {
     return res.json();
   },
 
+  // Renombrar proyecto y sus tareas asociadas
+  renameProject: async (projectName, newName) => {
+    const res = await fetch(
+      `${API_BASE_URL}/projects/${encodeURIComponent(projectName)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ new_name: newName }),
+      }
+    );
+    if (!res.ok) {
+      const err = await res
+        .json()
+        .catch(() => ({ detail: "Error al renombrar el proyecto" }));
+      throw new Error(err.detail || "Error al renombrar el proyecto");
+    }
+    return res.json();
+  },
+
   // Eliminar proyecto completo y sus tareas
   deleteProject: async (projectName) => {
     const res = await fetch(
@@ -155,6 +174,61 @@ export const TaskAPI = {
         .json()
         .catch(() => ({ detail: "Error al eliminar el proyecto" }));
       throw new Error(err.detail || "Error al eliminar el proyecto");
+    }
+    return res.json();
+  },
+};
+
+export const RoleAPI = {
+  // Listar todos los roles
+  getRoles: async () => {
+    const res = await fetch(`${API_BASE_URL}/roles`);
+    if (!res.ok) throw new Error("Error al obtener lista de roles");
+    return res.json();
+  },
+
+  // Crear nuevo rol
+  createRole: async (roleData) => {
+    const res = await fetch(`${API_BASE_URL}/roles`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(roleData),
+    });
+    if (!res.ok) {
+      const err = await res
+        .json()
+        .catch(() => ({ detail: "Error al crear rol" }));
+      throw new Error(err.detail || "Error al crear rol");
+    }
+    return res.json();
+  },
+
+  // Modificar rol existente
+  updateRole: async (id, roleData) => {
+    const res = await fetch(`${API_BASE_URL}/roles/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(roleData),
+    });
+    if (!res.ok) {
+      const err = await res
+        .json()
+        .catch(() => ({ detail: "Error al actualizar rol" }));
+      throw new Error(err.detail || "Error al actualizar rol");
+    }
+    return res.json();
+  },
+
+  // Eliminar rol
+  deleteRole: async (id) => {
+    const res = await fetch(`${API_BASE_URL}/roles/${id}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const err = await res
+        .json()
+        .catch(() => ({ detail: "Error al eliminar rol" }));
+      throw new Error(err.detail || "Error al eliminar rol");
     }
     return res.json();
   },
