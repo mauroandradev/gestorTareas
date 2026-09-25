@@ -1,4 +1,20 @@
-/* Custom Scrollbar for dark theme containers */
+/* =========================================================================
+   TASKPULSE / GESTOR DE TAREAS - THEME STYLES (LIGHT & DARK MODE)
+========================================================================= */
+
+/* Base transitions */
+*, *::before, *::after {
+  transition-property: background-color, border-color, color, fill, stroke;
+  transition-duration: 150ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Exclude animations and transforms from global transition to avoid lag */
+.animate-in, [class*="translate-"], [class*="scale-"], [class*="rotate-"] {
+  transition-property: transform, opacity, background-color, border-color, color;
+}
+
+/* Custom Scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -14,10 +30,190 @@
   background: #6366f1;
 }
 
+html.light ::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+}
+html.light ::-webkit-scrollbar-thumb:hover {
+  background: #6366f1;
+}
+
+/* Body & Root Defaults */
 body {
   margin: 0;
-  background-color: #060e20;
-  color: #f1f5f9;
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   overflow-x: hidden;
+  background-color: #060e20;
+  color: #f1f5f9;
+}
+
+/* =========================================================================
+   LIGHT THEME ADAPTATIONS (HIGH CONTRAST & CLEAN MODERN DESIGN)
+========================================================================= */
+html.light body {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+/* Surfaces & Containers in Light Mode */
+html.light .bg-\[\#060e20\] {
+  background-color: #f1f5f9 !important;
+}
+
+html.light .bg-\[\#0b1326\] {
+  background-color: #ffffff !important;
+}
+
+html.light .bg-\[\#131b2e\] {
+  background-color: #f8fafc !important;
+}
+
+html.light .bg-\[\#171f33\] {
+  background-color: #e2e8f0 !important;
+}
+
+/* Borders in Light Mode */
+html.light .border-\[\#222a3d\] {
+  border-color: #e2e8f0 !important;
+}
+
+html.light .border-\[\#2d3449\] {
+  border-color: #cbd5e1 !important;
+}
+
+/* Hover States in Light Mode */
+html.light .hover\:bg-\[\#131b2e\]:hover {
+  background-color: #f1f5f9 !important;
+}
+
+html.light .hover\:bg-\[\#222a3d\]:hover {
+  background-color: #e2e8f0 !important;
+}
+
+/* Text Hierarchy in Light Mode */
+html.light h1,
+html.light h2,
+html.light h3,
+html.light h4,
+html.light h5,
+html.light h6 {
+  color: #0f172a !important;
+}
+
+html.light .text-white:not(
+  .bg-indigo-600 *,
+  .bg-indigo-700 *,
+  .bg-rose-600 *,
+  .bg-rose-700 *,
+  .bg-amber-600 *,
+  .bg-emerald-600 *,
+  .bg-cyan-600 *,
+  [class*="from-indigo"] *,
+  [class*="from-rose"] *,
+  [class*="from-purple"] *,
+  .bg-indigo-600,
+  .bg-rose-600,
+  .bg-amber-600,
+  .bg-emerald-600
+) {
+  color: #0f172a !important;
+}
+
+html.light .text-slate-200,
+html.light .text-slate-300 {
+  color: #1e293b !important;
+}
+
+html.light .text-slate-400 {
+  color: #475569 !important;
+}
+
+html.light .text-slate-500 {
+  color: #64748b !important;
+}
+
+/* High Contrast Inputs, Selects & Textareas in Light Mode */
+html.light input:not([type="checkbox"]):not([type="radio"]),
+html.light select,
+html.light textarea {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+
+html.light input:focus,
+html.light select:focus,
+html.light textarea:focus {
+  border-color: #4f46e5 !important;
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.15) !important;
+}
+
+html.light input::placeholder,
+html.light textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+/* Modals & Dialogs in Light Mode */
+html.light .fixed.inset-0.bg-black\/70,
+html.light .fixed.inset-0.bg-black\/75,
+html.light .fixed.inset-0.bg-black\/80,
+html.light .fixed.inset-0.bg-black\/85 {
+  background-color: rgba(15, 23, 42, 0.5) !important;
+}
+
+/* Kanban Cards and List Items in Light Mode */
+html.light .kanban-card,
+html.light [draggable="true"] {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.06), 0 1px 2px -1px rgba(0, 0, 0, 0.04) !important;
+}
+
+html.light .kanban-card:hover,
+html.light [draggable="true"]:hover {
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.06) !important;
+}
+
+/* Light Mode Badges Contrast */
+html.light .bg-indigo-500\/10 {
+  background-color: #e0e7ff !important;
+}
+html.light .text-indigo-400 {
+  color: #4f46e5 !important;
+}
+html.light .text-indigo-300 {
+  color: #4338ca !important;
+}
+
+html.light .bg-amber-500\/10 {
+  background-color: #fef3c7 !important;
+}
+html.light .text-amber-400,
+html.light .text-amber-300 {
+  color: #b45309 !important;
+}
+
+html.light .bg-rose-500\/10,
+html.light .bg-rose-500\/15 {
+  background-color: #ffe4e6 !important;
+}
+html.light .text-rose-400,
+html.light .text-rose-300 {
+  color: #be123c !important;
+}
+
+html.light .bg-emerald-500\/10 {
+  background-color: #d1fae5 !important;
+}
+html.light .text-emerald-400,
+html.light .text-emerald-300 {
+  color: #047857 !important;
+}
+
+html.light .bg-cyan-500\/10 {
+  background-color: #cffafe !important;
+}
+html.light .text-cyan-400,
+html.light .text-cyan-300 {
+  color: #0e7490 !important;
 }

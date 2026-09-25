@@ -9,7 +9,7 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState("");
 
-  // Purge any residual items in localStorage
+  // Purge any residual items in localStorage (except theme)
   useEffect(() => {
     try {
       localStorage.removeItem("taskpulse_user");
@@ -17,6 +17,32 @@ export default function App() {
       localStorage.removeItem("taskpulse_custom_projects");
     } catch {}
   }, []);
+
+  // ----------------- THEME STATE (LIGHT / DARK) -----------------
+  const [theme, setTheme] = useState(() => {
+    try {
+      return localStorage.getItem("taskpulse_theme") || "dark";
+    } catch {
+      return "dark";
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("taskpulse_theme", theme);
+    } catch {}
+    if (theme === "dark") {
+      document.documentElement.classList.add("dark");
+      document.documentElement.classList.remove("light");
+    } else {
+      document.documentElement.classList.remove("dark");
+      document.documentElement.classList.add("light");
+    }
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
+  };
 
   // ----------------- MAIN APP STATE -----------------
   const [tasks, setTasks] = useState([]);
@@ -987,6 +1013,26 @@ export default function App() {
   if (!currentUser) {
     return (
       <div className="min-h-screen bg-[#060e20] flex items-center justify-center p-4 text-slate-100 font-sans relative overflow-hidden">
+        {/* Theme Switcher Button on Login */}
+        <div className="absolute top-4 right-4 z-20">
+          <button
+            onClick={toggleTheme}
+            type="button"
+            className="px-3 py-2 rounded-2xl bg-[#0b1326]/90 hover:bg-[#131b2e] border border-[#222a3d] text-slate-200 hover:text-white transition-all shadow-lg flex items-center gap-2 backdrop-blur-md"
+            title={
+              theme === "dark"
+                ? "Cambiar a Modo Claro"
+                : "Cambiar a Modo Oscuro"
+            }>
+            <span className="material-symbols-outlined text-[18px] text-amber-400">
+              {theme === "dark" ? "light_mode" : "dark_mode"}
+            </span>
+            <span className="text-xs font-bold">
+              {theme === "dark" ? "Modo Claro" : "Modo Oscuro"}
+            </span>
+          </button>
+        </div>
+
         {/* Glow ambient background effects */}
         <div className="absolute -top-40 -left-40 w-96 h-96 bg-indigo-600/20 rounded-full blur-[120px] pointer-events-none"></div>
         <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-cyan-600/20 rounded-full blur-[120px] pointer-events-none"></div>
@@ -1194,8 +1240,26 @@ export default function App() {
           </button>
         </div>
 
-        {/* Right: Actions, Admin Button & User Profile */}
+        {/* Right: Actions, Theme Switcher, Admin Button & User Profile */}
         <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+          {/* Theme Toggle Button */}
+          <button
+            onClick={toggleTheme}
+            type="button"
+            className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl bg-[#131b2e] hover:bg-[#222a3d] border border-[#222a3d] text-slate-300 hover:text-white transition-all flex items-center gap-1.5 shadow-sm"
+            title={
+              theme === "dark"
+                ? "Cambiar a Modo Claro"
+                : "Cambiar a Modo Oscuro"
+            }>
+            <span className="material-symbols-outlined text-[18px] text-amber-400">
+              {theme === "dark" ? "light_mode" : "dark_mode"}
+            </span>
+            <span className="hidden xl:inline text-xs font-semibold">
+              {theme === "dark" ? "Claro" : "Oscuro"}
+            </span>
+          </button>
+
           {/* Admin User Management Button */}
           {currentUser?.is_admin && (
             <button
