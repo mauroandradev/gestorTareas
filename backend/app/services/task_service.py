@@ -1,13 +1,36 @@
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, desc
 
 from ..models.task import Task
+from ..models.project import Project
 from ..schemas.task import TaskCreate, TaskUpdate, TaskStatusUpdate
 
 
 class TaskService:
+    @staticmethod
+    def _get_user_accessible_projects(db: Session, user_name: str) -> Set[str]:
+        """Find all project names where user is owner, assigned member, or has tasks assigned."""
+        user_clean = user_name.strip()
+        accessible_projects: Set[str] = set()
+
+        # 1. Check Project model
+        projects = db.query(Project).all()
+        for p in projects:
+            owner = p.owner_name or "Administrador Principal"
+            members_list = [m.strip() for m in (p.members or "").split(",") if m.strip()]
+            if owner.lower() == user_clean.lower() or any(m.lower() == user_clean.lower() for m in members_list):
+                accessible_projects.add(p.name)
+
+        # 2. Check Tasks assignees
+        task_projects = db.query(Task.project).filter(Task.assignee.ilike(f"%{user_clean}%")).distinct().all()
+        for tp in task_projects:
+            if tp[0]:
+                accessible_projects.add(tp[0])
+
+        return accessible_projects
+
     @staticmethod
     def get_tasks(
         db: Session,
@@ -24,12 +47,11 @@ class TaskService:
         """Fetch tasks matching any optional filter criteria with role-based project visibility."""
         query = db.query(Task)
 
-        # Role-based project visibility: non-admins only see tasks in projects they are assigned to
+        # Role-based project visibility: non-admins only see tasks in projects they are owner/member/assigned to
         if not is_admin and user_name:
-            user_project_rows = db.query(Task.project).filter(Task.assignee.ilike(f"%{user_name.strip()}%")).distinct().all()
-            user_projects = {p[0] for p in user_project_rows if p[0]}
-            if user_projects:
-                query = query.filter(Task.project.in_(user_projects))
+            accessible_projects = TaskService._get_user_accessible_projects(db, user_name)
+            if accessible_projects:
+                query = query.filter(Task.project.in_(accessible_projects))
             else:
                 query = query.filter(Task.assignee.ilike(f"%{user_name.strip()}%"))
 
@@ -88,14 +110,15 @@ class TaskService:
         task = Task(
             title=task_in.title.strip(),
             description=task_in.description.strip() if task_in.description else None,
-            priority=task_in.priority or "Media",
-            status=task_in.status or "Pendiente",
-            project=task_in.project or "General",
+            priority=task_in.priority,
+            status=task_in.status,
+            project=task_in.project.strip() if task_in.project else "General",
             assignee=assignee_val,
             start_date=start_date,
             due_date=task_in.due_date,
             completed_at=completed_at
         )
+
         db.add(task)
         db.commit()
         db.refresh(task)
@@ -166,15 +189,26 @@ class TaskService:
         new_clean = new_name.strip()
         if not new_clean:
             raise ValueError("El nuevo nombre del proyecto no puede estar vacío")
-        
+
+        # Rename in tasks
         updated_count = db.query(Task).filter(Task.project == old_clean).update({Task.project: new_clean})
+
+        # Rename in Project model if exists
+        project = db.query(Project).filter(Project.name == old_clean).first()
+        if project:
+            project.name = new_clean
+
         db.commit()
         return updated_count
 
     @staticmethod
     def delete_project(db: Session, project_name: str) -> int:
-        """Delete all tasks matching the specified project name."""
-        deleted_count = db.query(Task).filter(Task.project == project_name).delete()
+        """Delete all tasks and Project record matching the specified project name."""
+        clean_proj = project_name.strip()
+        deleted_count = db.query(Task).filter(Task.project == clean_proj).delete()
+        project = db.query(Project).filter(Project.name == clean_proj).first()
+        if project:
+            db.delete(project)
         db.commit()
         return deleted_count
 
@@ -183,16 +217,17 @@ class TaskService:
         """Compute aggregated statistics for tasks and projects with role-based visibility."""
         if is_admin or not user_name:
             tasks = db.query(Task).all()
-            projects_set = {t.project for t in tasks if t.project}
+            db_projects = [p.name for p in db.query(Project.name).all()]
+            task_projects = [t.project for t in tasks if t.project]
+            projects_set = set(db_projects + task_projects)
             if not projects_set:
                 projects_set = {"Q3 Lanzamiento", "Soporte al Cliente", "Rediseño Web"}
         else:
-            # Non-admin: only projects where the user is an assigned member of tasks
-            user_project_rows = db.query(Task.project).filter(Task.assignee.ilike(f"%{user_name.strip()}%")).distinct().all()
-            user_projects = {p[0] for p in user_project_rows if p[0]}
-            if user_projects:
-                tasks = db.query(Task).filter(Task.project.in_(user_projects)).all()
-                projects_set = user_projects
+            # Non-admin: only projects where the user is owner, member, or assigned
+            accessible_projects = TaskService._get_user_accessible_projects(db, user_name)
+            if accessible_projects:
+                tasks = db.query(Task).filter(Task.project.in_(accessible_projects)).all()
+                projects_set = accessible_projects
             else:
                 tasks = db.query(Task).filter(Task.assignee.ilike(f"%{user_name.strip()}%")).all()
                 projects_set = {t.project for t in tasks if t.project}

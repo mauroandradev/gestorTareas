@@ -21,7 +21,11 @@ from .role import (
     RoleResponse
 )
 from .project import (
-    ProjectUpdate
+    ProjectBase,
+    ProjectCreate,
+    ProjectUpdate,
+    ProjectMemberUpdate,
+    ProjectResponse
 )
 
 __all__ = [
@@ -41,5 +45,9 @@ __all__ = [
     "RoleCreate",
     "RoleUpdate",
     "RoleResponse",
-    "ProjectUpdate"
+    "ProjectBase",
+    "ProjectCreate",
+    "ProjectUpdate",
+    "ProjectMemberUpdate",
+    "ProjectResponse"
 ]

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { TaskAPI, AuthAPI, RoleAPI } from "./services/api";
+import { TaskAPI, AuthAPI, RoleAPI, ProjectAPI } from "./services/api";
 
 export default function App() {
   // ----------------- AUTHENTICATION STATE -----------------
@@ -22,6 +22,7 @@ export default function App() {
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
   const [roles, setRoles] = useState([]);
+  const [projects, setProjects] = useState([]);
   const [stats, setStats] = useState({
     total: 0,
     pendientes: 0,
@@ -78,12 +79,22 @@ export default function App() {
     due_date: "",
   });
 
-  // Project Creation & Edit Modal State
+  // Project Creation & Edit / Member Management Modal State
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
-  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectForm, setNewProjectForm] = useState({
+    name: "",
+    description: "",
+    members: [],
+  });
+
   const [isEditProjectModalOpen, setIsEditProjectModalOpen] = useState(false);
-  const [editingProjectOldName, setEditingProjectOldName] = useState("");
-  const [editingProjectNewName, setEditingProjectNewName] = useState("");
+  const [editingProject, setEditingProject] = useState(null);
+  const [editProjectForm, setEditProjectForm] = useState({
+    name: "",
+    description: "",
+    owner_name: "",
+    members: [],
+  });
 
   // User & Roles Management Modal State (Admin Only)
   const [isUserManagementOpen, setIsUserManagementOpen] = useState(false);
@@ -118,34 +129,13 @@ export default function App() {
   // Toast State
   const [toast, setToast] = useState(null);
 
-  const defaultProjects = [
-    "Q3 Lanzamiento",
-    "Soporte al Cliente",
-    "Rediseño Web",
-    "Infraestructura",
-  ];
-  const [deletedProjects, setDeletedProjects] = useState([]);
-  const [customProjects, setCustomProjects] = useState([]);
-
   // Check if current user has Admin privileges
   const isAdmin = Boolean(
     currentUser?.is_admin || currentUser?.role === "Administrador",
   );
 
-  // Merge unique project names based on role permissions:
-  // Admins see all existing, default and custom projects;
-  // Regular users see ONLY the projects they are assigned to (stats.proyectos).
-  const projectList = (
-    isAdmin
-      ? Array.from(
-          new Set([
-            ...defaultProjects,
-            ...customProjects,
-            ...(stats.proyectos || []),
-          ]),
-        )
-      : Array.from(new Set(stats.proyectos || []))
-  ).filter((p) => !deletedProjects.includes(p));
+  // Derive project names list from project objects
+  const projectList = projects.map((p) => p.name);
 
   const priorities = ["Baja", "Media", "Alta", "Urgente"];
   const statuses = ["Pendiente", "En Progreso", "Completada"];
@@ -207,25 +197,30 @@ export default function App() {
       setLoading(true);
       const dateParams = getDateRange();
 
-      const [taskList, statsData, usersData, rolesData] = await Promise.all([
-        TaskAPI.getTasks({
-          search,
-          status: statusFilter,
-          project: currentProject,
-          priority: priorityFilter,
-          assignee: assigneeFilter !== "Todas" ? assigneeFilter : undefined,
-          fromDate: dateParams.from,
-          toDate: dateParams.overdueOnly ? "" : dateParams.to,
-          user_name: currentUser.name,
-          is_admin: isAdmin,
-        }),
-        TaskAPI.getStats({
-          user_name: currentUser.name,
-          is_admin: isAdmin,
-        }),
-        AuthAPI.getUsers().catch(() => []),
-        RoleAPI.getRoles().catch(() => []),
-      ]);
+      const [taskList, statsData, usersData, rolesData, projectsData] =
+        await Promise.all([
+          TaskAPI.getTasks({
+            search,
+            status: statusFilter,
+            project: currentProject,
+            priority: priorityFilter,
+            assignee: assigneeFilter !== "Todas" ? assigneeFilter : undefined,
+            fromDate: dateParams.from,
+            toDate: dateParams.overdueOnly ? "" : dateParams.to,
+            user_name: currentUser.name,
+            is_admin: isAdmin,
+          }),
+          TaskAPI.getStats({
+            user_name: currentUser.name,
+            is_admin: isAdmin,
+          }),
+          AuthAPI.getUsers().catch(() => []),
+          RoleAPI.getRoles().catch(() => []),
+          ProjectAPI.getProjects({
+            user_name: currentUser.name,
+            is_admin: isAdmin,
+          }).catch(() => []),
+        ]);
 
       let finalTasks = taskList || [];
       if (dateParams.overdueOnly) {
@@ -238,6 +233,7 @@ export default function App() {
 
       setTasks(finalTasks);
       setRoles(rolesData || []);
+      setProjects(projectsData || []);
       setStats(
         statsData || {
           total: 0,
@@ -385,50 +381,101 @@ export default function App() {
     }
   };
 
-  // ----------------- PROJECT EDIT HANDLERS -----------------
-  const handleOpenEditProject = (projectName) => {
-    setEditingProjectOldName(projectName);
-    setEditingProjectNewName(projectName);
-    setIsEditProjectModalOpen(true);
+  // ----------------- PROJECT ACTIONS & MEMBER MANAGEMENT -----------------
+  const handleOpenCreateProject = () => {
+    setNewProjectForm({
+      name: "",
+      description: "",
+      members: currentUser?.name ? [currentUser.name] : [],
+    });
+    setIsNewProjectModalOpen(true);
   };
 
-  const handleSaveRenameProject = async (e) => {
+  const handleCreateProject = async (e) => {
     e.preventDefault();
-    const oldName = editingProjectOldName;
-    const newName = editingProjectNewName.trim();
-    if (!newName) {
-      showToast("El nombre del proyecto no puede estar vacío", "error");
+    const cleanName = newProjectForm.name.trim();
+    if (!cleanName) {
+      showToast("El nombre del proyecto es obligatorio", "error");
       return;
     }
-    if (newName === oldName) {
-      setIsEditProjectModalOpen(false);
-      return;
-    }
-    if (projectList.includes(newName)) {
-      showToast("Ya existe otro proyecto con ese nombre", "error");
+    if (projectList.includes(cleanName)) {
+      showToast("Ya existe un proyecto con ese nombre", "error");
       return;
     }
 
     try {
-      await TaskAPI.renameProject(oldName, newName);
-      setCustomProjects((prev) => {
-        const updated = prev.map((p) => (p === oldName ? newName : p));
-        if (!updated.includes(newName)) updated.push(newName);
-        return updated;
-      });
+      const payload = {
+        name: cleanName,
+        description: newProjectForm.description?.trim() || null,
+        owner_name: currentUser?.name || "Administrador Principal",
+        members: Array.from(
+          new Set([currentUser?.name, ...(newProjectForm.members || [])]),
+        ).filter(Boolean),
+      };
+      await ProjectAPI.createProject(payload, currentUser?.name);
+      setCurrentProject(cleanName);
+      setIsNewProjectModalOpen(false);
+      showToast(
+        `Proyecto "${cleanName}" creado correctamente con sus miembros`,
+      );
+      loadData();
+    } catch (err) {
+      showToast(err.message || "Error al crear proyecto", "error");
+    }
+  };
 
-      setDeletedProjects((prev) => {
-        return prev.filter((p) => p !== newName);
-      });
+  const handleOpenEditProject = (proj) => {
+    const projObj =
+      typeof proj === "object"
+        ? proj
+        : projects.find((p) => p.name === proj) || {
+            name: proj,
+            description: "",
+            owner_name: currentUser?.name,
+            members: [],
+          };
+    setEditingProject(projObj);
+    setEditProjectForm({
+      name: projObj.name,
+      description: projObj.description || "",
+      owner_name: projObj.owner_name || currentUser?.name,
+      members: Array.isArray(projObj.members) ? [...projObj.members] : [],
+    });
+    setIsEditProjectModalOpen(true);
+  };
+
+  const handleSaveEditProject = async (e) => {
+    e.preventDefault();
+    if (!editingProject) return;
+    const oldName = editingProject.name;
+    const newName = editProjectForm.name.trim();
+    if (!newName) {
+      showToast("El nombre del proyecto no puede estar vacío", "error");
+      return;
+    }
+
+    try {
+      const payload = {
+        name: newName,
+        description: editProjectForm.description?.trim() || null,
+        owner_name: editProjectForm.owner_name || editingProject.owner_name,
+        members: editProjectForm.members || [],
+      };
+      await ProjectAPI.updateProject(
+        oldName,
+        payload,
+        currentUser?.name,
+        isAdmin,
+      );
 
       if (currentProject === oldName) {
         setCurrentProject(newName);
       }
       setIsEditProjectModalOpen(false);
-      showToast(`Proyecto renombrado a "${newName}"`);
+      showToast(`Proyecto "${newName}" y miembros actualizados`);
       loadData();
     } catch (err) {
-      showToast(err.message || "Error al renombrar el proyecto", "error");
+      showToast(err.message || "Error al actualizar proyecto", "error");
     }
   };
 
@@ -542,9 +589,11 @@ export default function App() {
         }
         loadData();
       } else if (deleteModal.type === "project") {
-        await TaskAPI.deleteProject(deleteModal.id);
-        setDeletedProjects((prev) => Array.from(new Set([...prev, deleteModal.id])));
-        setCustomProjects((prev) => prev.filter((p) => p !== deleteModal.id));
+        await ProjectAPI.deleteProject(
+          deleteModal.id,
+          currentUser?.name,
+          isAdmin,
+        );
         if (currentProject === deleteModal.id) {
           setCurrentProject("Todos");
         }
@@ -678,21 +727,6 @@ export default function App() {
     }
   };
 
-  const handleCreateProject = (e) => {
-    e.preventDefault();
-    const cleanName = newProjectName.trim();
-    if (!cleanName) return;
-    if (projectList.includes(cleanName)) {
-      showToast("El proyecto ya existe", "error");
-      return;
-    }
-    setDeletedProjects((prev) => prev.filter((p) => p !== cleanName));
-    setCustomProjects((prev) => [...prev.filter((p) => p !== cleanName), cleanName]);
-    setCurrentProject(cleanName);
-    setNewProjectName("");
-    setIsNewProjectModalOpen(false);
-    showToast(`Proyecto "${cleanName}" creado`);
-  };
 
   // ----------------- DRAG & DROP HANDLERS -----------------
   const handleDragStart = (e, taskId) => {
@@ -1305,35 +1339,38 @@ export default function App() {
             <div className="flex flex-col gap-1">
               <div className="flex items-center justify-between px-2 mb-1">
                 <span className="text-[11px] font-extrabold uppercase text-slate-400 tracking-wider">
-                  {isAdmin ? "Todos los Proyectos" : "Mis Proyectos Asignados"}
+                  {isAdmin ? "Todos los Proyectos" : "Mis Proyectos"}
                 </span>
-                {isAdmin && (
-                  <button
-                    onClick={() => setIsNewProjectModalOpen(true)}
-                    className="text-indigo-400 hover:text-indigo-300 text-xs font-bold flex items-center gap-0.5"
-                    title="Crear nuevo proyecto">
-                    <span className="material-symbols-outlined text-[14px]">
-                      add
-                    </span>
-                    <span>Nuevo</span>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={handleOpenCreateProject}
+                  className="text-indigo-400 hover:text-indigo-300 text-xs font-bold flex items-center gap-0.5 hover:bg-indigo-500/10 px-1.5 py-0.5 rounded-lg transition-colors"
+                  title="Crear nuevo proyecto">
+                  <span className="material-symbols-outlined text-[14px]">
+                    add
+                  </span>
+                  <span>Nuevo</span>
+                </button>
               </div>
 
-              {projectList.length === 0 ? (
+              {projects.length === 0 ? (
                 <div className="px-3 py-4 text-center text-xs text-slate-400 italic bg-[#060e20] rounded-xl border border-[#222a3d]">
                   {isAdmin
                     ? "No hay proyectos creados."
                     : "No tienes proyectos asignados actualmente."}
                 </div>
               ) : (
-                projectList.map((proj) => {
-                  const isSelected = currentProject === proj;
-                  const projCount = stats.project_counts?.[proj] ?? 0;
+                projects.map((proj) => {
+                  const isSelected = currentProject === proj.name;
+                  const projCount =
+                    stats.project_counts?.[proj.name] ??
+                    (proj.task_count ?? 0);
+                  const isOwner = proj.owner_name === currentUser?.name;
+                  const canManage = isAdmin || isOwner;
 
                   return (
                     <div
-                      key={proj}
+                      key={proj.id || proj.name}
                       className={`group w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-all ${
                         isSelected
                           ? "bg-indigo-600 text-white font-bold shadow-md shadow-indigo-600/20"
@@ -1342,13 +1379,20 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => {
-                          setCurrentProject(proj);
+                          setCurrentProject(proj.name);
                           setIsMobileMenuOpen(false);
                         }}
-                        className="flex items-center gap-2 truncate flex-1 text-left">
+                        className="flex items-center gap-2 truncate flex-1 text-left min-w-0 pr-1">
                         <span
                           className={`w-2 h-2 rounded-full shrink-0 ${isSelected ? "bg-white" : "bg-indigo-400"}`}></span>
-                        <span className="truncate">{proj}</span>
+                        <span className="truncate">{proj.name}</span>
+                        {isOwner && (
+                          <span
+                            className="inline-flex items-center text-[10px] text-amber-300 shrink-0"
+                            title="Eres el dueño de este proyecto">
+                            👑
+                          </span>
+                        )}
                       </button>
                       <div className="flex items-center gap-1 shrink-0">
                         <span
@@ -1359,7 +1403,7 @@ export default function App() {
                           }`}>
                           {projCount}
                         </span>
-                        {isAdmin && (
+                        {canManage && (
                           <>
                             <button
                               type="button"
@@ -1370,25 +1414,29 @@ export default function App() {
                               className={`p-1 rounded-lg transition-all ${
                                 isSelected
                                   ? "text-white/80 hover:text-white hover:bg-white/20"
-                                  : "text-slate-500 hover:text-amber-300 hover:bg-amber-500/10 md:opacity-0 md:group-hover:opacity-100"
+                                  : "text-slate-500 hover:text-indigo-300 hover:bg-indigo-500/10 md:opacity-0 md:group-hover:opacity-100"
                               }`}
-                              title={`Modificar/Renombrar proyecto "${proj}"`}>
+                              title={
+                                isOwner
+                                  ? `Gestionar personas y miembros de "${proj.name}"`
+                                  : `Modificar proyecto "${proj.name}" (Admin)`
+                              }>
                               <span className="material-symbols-outlined text-[15px]">
-                                edit
+                                group_add
                               </span>
                             </button>
                             <button
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                openDeleteProjectModal(proj, projCount);
+                                openDeleteProjectModal(proj.name, projCount);
                               }}
                               className={`p-1 rounded-lg transition-all ${
                                 isSelected
                                   ? "text-white/80 hover:text-white hover:bg-white/20"
                                   : "text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 md:opacity-0 md:group-hover:opacity-100"
                               }`}
-                              title={`Eliminar proyecto "${proj}"`}>
+                              title={`Eliminar proyecto "${proj.name}"`}>
                               <span className="material-symbols-outlined text-[15px]">
                                 delete
                               </span>
@@ -3025,50 +3073,186 @@ export default function App() {
           MODAL: CREAR PROYECTO
       ========================================================================= */}
       {isNewProjectModalOpen && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-[#0b1326] border border-[#222a3d] rounded-3xl w-full max-w-sm p-5 shadow-2xl flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between pb-2 border-b border-[#222a3d]">
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <span className="material-symbols-outlined text-indigo-400">
-                  create_new_folder
-                </span>
-                <span>Nuevo Proyecto</span>
-              </h3>
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-150">
+          <div className="bg-[#0b1326] border border-[#222a3d] rounded-3xl w-full max-w-lg p-5 sm:p-6 shadow-2xl flex flex-col gap-4 max-h-[90vh] overflow-hidden animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-[#222a3d]">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
+                  <span className="material-symbols-outlined text-xl">
+                    create_new_folder
+                  </span>
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white tracking-tight">
+                    Nuevo Proyecto
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Serás el dueño (👑) de este proyecto y podrás invitar a tu equipo.
+                  </p>
+                </div>
+              </div>
               <button
+                type="button"
                 onClick={() => setIsNewProjectModalOpen(false)}
-                className="text-slate-400 hover:text-white p-1">
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-[#131b2e] transition-colors">
                 <span className="material-symbols-outlined text-xl">close</span>
               </button>
             </div>
 
             <form
               onSubmit={handleCreateProject}
-              className="flex flex-col gap-3 text-xs">
-              <div className="flex flex-col gap-1">
+              className="flex flex-col gap-4 text-xs overflow-y-auto pr-1">
+              <div className="flex flex-col gap-1.5">
                 <label className="font-bold text-slate-300">
                   Nombre del Proyecto *
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="ej. Expansión Móvil Q4"
-                  value={newProjectName}
-                  onChange={(e) => setNewProjectName(e.target.value)}
-                  className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500"
+                  placeholder="ej. Lanzamiento App Móvil"
+                  value={newProjectForm.name}
+                  onChange={(e) =>
+                    setNewProjectForm({
+                      ...newProjectForm,
+                      name: e.target.value,
+                    })
+                  }
+                  className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 transition-colors"
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2">
+              <div className="flex flex-col gap-1.5">
+                <label className="font-bold text-slate-300">
+                  Descripción (Opcional)
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="Describe el objetivo y alcance de este proyecto..."
+                  value={newProjectForm.description}
+                  onChange={(e) =>
+                    setNewProjectForm({
+                      ...newProjectForm,
+                      description: e.target.value,
+                    })
+                  }
+                  className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 transition-colors resize-none"
+                />
+              </div>
+
+              {/* Members Selection */}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-slate-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-indigo-400">
+                      group
+                    </span>
+                    <span>Miembros del Equipo</span>
+                    <span className="text-[11px] font-normal text-indigo-400">
+                      ({newProjectForm.members?.length || 0} asignados)
+                    </span>
+                  </label>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const allNames = users.map((u) => u.name);
+                        setNewProjectForm({
+                          ...newProjectForm,
+                          members: allNames,
+                        });
+                      }}
+                      className="text-indigo-400 hover:text-indigo-300 font-semibold hover:underline">
+                      Todos
+                    </button>
+                    <span className="text-slate-600">•</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewProjectForm({
+                          ...newProjectForm,
+                          members: currentUser?.name ? [currentUser.name] : [],
+                        });
+                      }}
+                      className="text-slate-400 hover:text-slate-300 font-semibold hover:underline">
+                      Solo yo
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-44 overflow-y-auto p-1.5 bg-[#060e20] rounded-xl border border-[#222a3d]">
+                  {users.map((u) => {
+                    const isSelected = newProjectForm.members.includes(u.name);
+                    const isCurrentUser = u.name === currentUser?.name;
+
+                    return (
+                      <div
+                        key={u.id || u.name}
+                        onClick={() => {
+                          const exists = newProjectForm.members.includes(u.name);
+                          const nextMembers = exists
+                            ? newProjectForm.members.filter((m) => m !== u.name)
+                            : [...newProjectForm.members, u.name];
+                          setNewProjectForm({
+                            ...newProjectForm,
+                            members: nextMembers,
+                          });
+                        }}
+                        className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all border ${
+                          isSelected
+                            ? "bg-indigo-600/15 border-indigo-500/40 text-white"
+                            : "bg-[#0b1326] border-transparent hover:border-[#2d3449] text-slate-400"
+                        }`}>
+                        <div className="flex items-center gap-2 truncate">
+                          <div
+                            className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                              isSelected
+                                ? "bg-indigo-600 text-white"
+                                : "bg-[#171f33] text-slate-300"
+                            }`}>
+                            {u.name.charAt(0).toUpperCase()}
+                          </div>
+                          <div className="truncate">
+                            <div className="truncate font-semibold text-slate-200">
+                              {u.name}{" "}
+                              {isCurrentUser && (
+                                <span className="text-[10px] text-amber-400">
+                                  (Dueño 👑)
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-slate-500">
+                              {u.role}
+                            </div>
+                          </div>
+                        </div>
+                        <span
+                          className={`material-symbols-outlined text-[18px] shrink-0 ${
+                            isSelected ? "text-indigo-400" : "text-slate-600"
+                          }`}>
+                          {isSelected
+                            ? "check_box"
+                            : "check_box_outline_blank"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#222a3d]">
                 <button
                   type="button"
                   onClick={() => setIsNewProjectModalOpen(false)}
-                  className="px-3.5 py-1.5 rounded-xl bg-[#131b2e] hover:bg-[#222a3d] text-slate-300 font-semibold">
+                  className="px-4 py-2 rounded-xl bg-[#131b2e] hover:bg-[#222a3d] text-slate-300 font-semibold transition-colors">
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold">
-                  Crear Proyecto
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold shadow-md shadow-indigo-600/30 transition-all flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-[16px]">
+                    add_circle
+                  </span>
+                  <span>Crear Proyecto</span>
                 </button>
               </div>
             </form>
@@ -3077,62 +3261,256 @@ export default function App() {
       )}
 
       {/* =========================================================================
-          MODAL: MODIFICAR / RENOMBRAR PROYECTO
+          MODAL: GESTIONAR PROYECTO & MIEMBROS DEL EQUIPO
       ========================================================================= */}
-      {isEditProjectModalOpen && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-[#0b1326] border border-[#222a3d] rounded-3xl w-full max-w-sm p-5 shadow-2xl flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between pb-2 border-b border-[#222a3d]">
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <span className="material-symbols-outlined text-amber-400">
-                  edit_note
-                </span>
-                <span>Modificar Proyecto</span>
-              </h3>
+      {isEditProjectModalOpen && editingProject && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-150">
+          <div className="bg-[#0b1326] border border-[#222a3d] rounded-3xl w-full max-w-lg p-5 sm:p-6 shadow-2xl flex flex-col gap-4 max-h-[90vh] overflow-hidden animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-[#222a3d]">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+                  <span className="material-symbols-outlined text-xl">
+                    manage_accounts
+                  </span>
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white tracking-tight flex items-center gap-1.5">
+                    <span>Gestionar Proyecto & Miembros</span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    {editingProject.owner_name === currentUser?.name
+                      ? "Como dueño del proyecto, puedes agregar o quitar personas."
+                      : "Administración completa del proyecto y colaboradores."}
+                  </p>
+                </div>
+              </div>
               <button
+                type="button"
                 onClick={() => setIsEditProjectModalOpen(false)}
-                className="text-slate-400 hover:text-white p-1">
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-[#131b2e] transition-colors">
                 <span className="material-symbols-outlined text-xl">close</span>
               </button>
             </div>
 
             <form
-              onSubmit={handleSaveRenameProject}
-              className="flex flex-col gap-3 text-xs">
-              <div className="flex flex-col gap-1">
-                <label className="font-bold text-slate-400">
-                  Proyecto Actual
-                </label>
-                <div className="p-2.5 rounded-xl bg-[#060e20] border border-[#222a3d] text-slate-300 font-semibold">
-                  {editingProjectOldName}
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-1">
+              onSubmit={handleSaveEditProject}
+              className="flex flex-col gap-4 text-xs overflow-y-auto pr-1">
+              <div className="flex flex-col gap-1.5">
                 <label className="font-bold text-slate-300">
-                  Nuevo Nombre del Proyecto *
+                  Nombre del Proyecto *
                 </label>
                 <input
                   type="text"
                   required
                   placeholder="ej. Rediseño Web 2.0"
-                  value={editingProjectNewName}
-                  onChange={(e) => setEditingProjectNewName(e.target.value)}
-                  className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500"
+                  value={editProjectForm.name}
+                  onChange={(e) =>
+                    setEditProjectForm({
+                      ...editProjectForm,
+                      name: e.target.value,
+                    })
+                  }
+                  className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 transition-colors"
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2">
+              <div className="flex flex-col gap-1.5">
+                <label className="font-bold text-slate-300">
+                  Descripción (Opcional)
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="Objetivos o detalles del proyecto..."
+                  value={editProjectForm.description}
+                  onChange={(e) =>
+                    setEditProjectForm({
+                      ...editProjectForm,
+                      description: e.target.value,
+                    })
+                  }
+                  className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 transition-colors resize-none"
+                />
+              </div>
+
+              {/* Owner Info / Selector for Admin */}
+              <div className="flex flex-col gap-1.5">
+                <label className="font-bold text-slate-300 flex items-center gap-1">
+                  <span>Propietario / Dueño del Proyecto</span>
+                  <span className="text-amber-400">👑</span>
+                </label>
+                {isAdmin ? (
+                  <select
+                    value={editProjectForm.owner_name}
+                    onChange={(e) =>
+                      setEditProjectForm({
+                        ...editProjectForm,
+                        owner_name: e.target.value,
+                      })
+                    }
+                    className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 cursor-pointer">
+                    {users.map((u) => (
+                      <option key={u.id || u.name} value={u.name}>
+                        {u.name} ({u.role})
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="p-2.5 rounded-xl bg-[#060e20] border border-[#222a3d] text-amber-300 font-semibold flex items-center gap-2">
+                    <span className="material-symbols-outlined text-base">
+                      verified_user
+                    </span>
+                    <span>{editProjectForm.owner_name || currentUser?.name} (Tú)</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Members Checklist */}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-slate-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-indigo-400">
+                      group
+                    </span>
+                    <span>Personas Asignadas al Proyecto</span>
+                    <span className="text-[11px] font-normal text-indigo-400">
+                      ({editProjectForm.members?.length || 0} miembros)
+                    </span>
+                  </label>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const allNames = users.map((u) => u.name);
+                        setEditProjectForm({
+                          ...editProjectForm,
+                          members: allNames,
+                        });
+                      }}
+                      className="text-indigo-400 hover:text-indigo-300 font-semibold hover:underline">
+                      Todos
+                    </button>
+                    <span className="text-slate-600">•</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditProjectForm({
+                          ...editProjectForm,
+                          members: editProjectForm.owner_name
+                            ? [editProjectForm.owner_name]
+                            : [],
+                        });
+                      }}
+                      className="text-slate-400 hover:text-slate-300 font-semibold hover:underline">
+                      Solo Dueño
+                    </button>
+                  </div>
+                </div>
+
+                {/* Selected tags */}
+                {editProjectForm.members?.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 p-2 bg-[#060e20]/80 rounded-xl border border-[#222a3d] max-h-24 overflow-y-auto">
+                    {editProjectForm.members.map((m) => (
+                      <span
+                        key={m}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[11px] font-semibold">
+                        <span>{m}</span>
+                        {m === editProjectForm.owner_name && (
+                          <span className="text-[10px]" title="Dueño">👑</span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditProjectForm({
+                              ...editProjectForm,
+                              members: editProjectForm.members.filter(
+                                (name) => name !== m,
+                              ),
+                            });
+                          }}
+                          className="hover:text-rose-400 ml-0.5">
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* User checklist items */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto p-1.5 bg-[#060e20] rounded-xl border border-[#222a3d]">
+                  {users.map((u) => {
+                    const isMember = editProjectForm.members?.includes(u.name);
+                    const isOwner = u.name === editProjectForm.owner_name;
+
+                    return (
+                      <div
+                        key={u.id || u.name}
+                        onClick={() => {
+                          const currentMembers =
+                            editProjectForm.members || [];
+                          const nextMembers = currentMembers.includes(u.name)
+                            ? currentMembers.filter((m) => m !== u.name)
+                            : [...currentMembers, u.name];
+                          setEditProjectForm({
+                            ...editProjectForm,
+                            members: nextMembers,
+                          });
+                        }}
+                        className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all border ${
+                          isMember
+                            ? "bg-indigo-600/15 border-indigo-500/40 text-white"
+                            : "bg-[#0b1326] border-transparent hover:border-[#2d3449] text-slate-400"
+                        }`}>
+                        <div className="flex items-center gap-2 truncate">
+                          <div
+                            className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                              isMember
+                                ? "bg-indigo-600 text-white"
+                                : "bg-[#171f33] text-slate-300"
+                            }`}>
+                            {u.name.charAt(0).toUpperCase()}
+                          </div>
+                          <div className="truncate">
+                            <div className="truncate font-semibold text-slate-200">
+                              {u.name}{" "}
+                              {isOwner && (
+                                <span className="text-[10px] text-amber-400 font-bold">
+                                  👑 Dueño
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-slate-500">
+                              {u.role}
+                            </div>
+                          </div>
+                        </div>
+                        <span
+                          className={`material-symbols-outlined text-[18px] shrink-0 ${
+                            isMember ? "text-indigo-400" : "text-slate-600"
+                          }`}>
+                          {isMember
+                            ? "check_box"
+                            : "check_box_outline_blank"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#222a3d]">
                 <button
                   type="button"
                   onClick={() => setIsEditProjectModalOpen(false)}
-                  className="px-3.5 py-1.5 rounded-xl bg-[#131b2e] hover:bg-[#222a3d] text-slate-300 font-semibold">
+                  className="px-4 py-2 rounded-xl bg-[#131b2e] hover:bg-[#222a3d] text-slate-300 font-semibold transition-colors">
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold shadow-md shadow-amber-600/30">
-                  Guardar Cambios
+                  className="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold shadow-md shadow-amber-600/30 transition-all flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-[16px]">
+                    save
+                  </span>
+                  <span>Guardar Cambios</span>
                 </button>
               </div>
             </form>
