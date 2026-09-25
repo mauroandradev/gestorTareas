@@ -10,7 +10,12 @@ from .schemas import (
     TaskUpdate,
     TaskStatusUpdate,
     TaskResponse,
-    TaskStatsResponse
+    TaskStatsResponse,
+    RoleBase,
+    RoleCreate,
+    RoleUpdate,
+    RoleResponse,
+    ProjectUpdate
 )
 
 __all__ = [
@@ -25,5 +30,10 @@ __all__ = [
     "TaskUpdate",
     "TaskStatusUpdate",
     "TaskResponse",
-    "TaskStatsResponse"
+    "TaskStatsResponse",
+    "RoleBase",
+    "RoleCreate",
+    "RoleUpdate",
+    "RoleResponse",
+    "ProjectUpdate"
 ]

@@ -1,3 +1,3 @@
-from .models import User, Task, Base
+from .models import User, Task, Role, Base
 
-__all__ = ["User", "Task", "Base"]
+__all__ = ["User", "Task", "Role", "Base"]
