@@ -492,7 +492,7 @@ export default function App() {
       type: "role",
       id: role.id,
       title: role.name,
-      subtitle: `Los usuarios asignados a este rol (${role.user_count || 0} usuarios) pasarán al rol 'Miembro'.`,
+      subtitle: "Los usuarios asignados a este rol pasarán automáticamente al rol 'Miembro'.",
     });
   };
 
@@ -2588,75 +2588,6 @@ export default function App() {
       )}
 
       {/* =========================================================================
-          MODAL: CONFIRMACIÓN DE ELIMINACIÓN MODERNO (TAREAS Y USUARIOS)
-      ========================================================================= */}
-      {deleteModal.isOpen && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
-          <div className="bg-[#0b1326] border border-rose-500/30 rounded-2xl sm:rounded-3xl w-full max-w-md p-5 sm:p-6 shadow-2xl flex flex-col gap-4 text-center animate-in zoom-in-95 duration-150 relative overflow-hidden">
-            {/* Ambient subtle red glow */}
-            <div className="absolute -top-16 -right-16 w-36 h-36 bg-rose-600/20 rounded-full blur-2xl pointer-events-none"></div>
-
-            <div className="flex flex-col items-center gap-2 pt-2">
-              <div className="w-14 h-14 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 shadow-lg shadow-rose-500/10">
-                <span className="material-symbols-outlined text-3xl">
-                  delete_forever
-                </span>
-              </div>
-              <h3 className="text-lg font-bold text-white tracking-tight">
-                {deleteModal.type === "task"
-                  ? "¿Eliminar Tarea?"
-                  : deleteModal.type === "project"
-                    ? "¿Eliminar Proyecto y sus Tareas?"
-                    : deleteModal.type === "role"
-                      ? "¿Eliminar Rol del Equipo?"
-                      : "¿Eliminar Usuario?"}
-              </h3>
-              <p className="text-xs text-slate-300 leading-relaxed max-w-sm">
-                ¿Estás seguro de que deseas eliminar permanentemente:
-              </p>
-              <div className="px-3 py-2 bg-[#060e20] border border-[#222a3d] rounded-xl text-xs font-bold text-rose-300 max-w-full break-words">
-                "{deleteModal.title}"
-              </div>
-              {deleteModal.subtitle && (
-                <span className="text-[11px] text-slate-400">
-                  {deleteModal.subtitle}
-                </span>
-              )}
-              <p className="text-[11px] text-slate-500 italic mt-1">
-                Esta acción no se puede deshacer.
-              </p>
-            </div>
-
-            <div className="flex items-center justify-center gap-3 pt-3 border-t border-[#222a3d]">
-              <button
-                type="button"
-                onClick={() =>
-                  setDeleteModal({
-                    isOpen: false,
-                    type: "task",
-                    id: null,
-                    title: "",
-                    subtitle: "",
-                  })
-                }
-                className="flex-1 py-2.5 px-4 rounded-xl bg-[#131b2e] hover:bg-[#222a3d] text-slate-300 text-xs font-bold transition-colors">
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmDelete}
-                className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-all active:scale-95 flex items-center justify-center gap-1.5">
-                <span className="material-symbols-outlined text-[16px]">
-                  delete
-                </span>
-                <span>Sí, Eliminar</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* =========================================================================
           MODAL: GESTIÓN DE USUARIOS (SOLO ADMIN)
       ========================================================================= */}
       {isUserManagementOpen && (
@@ -2818,7 +2749,6 @@ export default function App() {
                       <tr>
                         <th className="py-2.5 px-3">Nombre del Rol</th>
                         <th className="py-2.5 px-3">Descripción</th>
-                        <th className="py-2.5 px-3">Usuarios Asignados</th>
                         <th className="py-2.5 px-3 text-right">Acciones</th>
                       </tr>
                     </thead>
@@ -2835,11 +2765,6 @@ export default function App() {
                           </td>
                           <td className="py-2.5 px-3 text-slate-400 max-w-xs truncate">
                             {r.description || "Sin descripción"}
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <span className="px-2 py-0.5 rounded-full bg-[#060e20] border border-[#222a3d] text-indigo-300 font-bold">
-                              {r.user_count || 0} usuarios
-                            </span>
                           </td>
                           <td className="py-2.5 px-3 text-right">
                             <div className="flex items-center justify-end gap-1.5">
@@ -3211,6 +3136,75 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: CONFIRMACIÓN DE ELIMINACIÓN MODERNO (SUPERIOR A TODOS LOS MODALES)
+      ========================================================================= */}
+      {deleteModal.isOpen && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[100] flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-[#0b1326] border border-rose-500/40 rounded-2xl sm:rounded-3xl w-full max-w-md p-5 sm:p-6 shadow-[0_0_50px_rgba(0,0,0,0.8)] flex flex-col gap-4 text-center animate-in zoom-in-95 duration-150 relative overflow-hidden">
+            {/* Ambient subtle red glow */}
+            <div className="absolute -top-16 -right-16 w-36 h-36 bg-rose-600/25 rounded-full blur-2xl pointer-events-none"></div>
+
+            <div className="flex flex-col items-center gap-2 pt-2">
+              <div className="w-14 h-14 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 shadow-lg shadow-rose-500/10">
+                <span className="material-symbols-outlined text-3xl">
+                  delete_forever
+                </span>
+              </div>
+              <h3 className="text-lg font-bold text-white tracking-tight">
+                {deleteModal.type === "task"
+                  ? "¿Eliminar Tarea?"
+                  : deleteModal.type === "project"
+                    ? "¿Eliminar Proyecto y sus Tareas?"
+                    : deleteModal.type === "role"
+                      ? "¿Eliminar Rol del Equipo?"
+                      : "¿Eliminar Usuario?"}
+              </h3>
+              <p className="text-xs text-slate-300 leading-relaxed max-w-sm">
+                ¿Estás seguro de que deseas eliminar permanentemente:
+              </p>
+              <div className="px-3 py-2 bg-[#060e20] border border-[#222a3d] rounded-xl text-xs font-bold text-rose-300 max-w-full break-words">
+                "{deleteModal.title}"
+              </div>
+              {deleteModal.subtitle && (
+                <span className="text-[11px] text-slate-400">
+                  {deleteModal.subtitle}
+                </span>
+              )}
+              <p className="text-[11px] text-slate-500 italic mt-1">
+                Esta acción no se puede deshacer.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-center gap-3 pt-3 border-t border-[#222a3d]">
+              <button
+                type="button"
+                onClick={() =>
+                  setDeleteModal({
+                    isOpen: false,
+                    type: "task",
+                    id: null,
+                    title: "",
+                    subtitle: "",
+                  })
+                }
+                className="flex-1 py-2.5 px-4 rounded-xl bg-[#131b2e] hover:bg-[#222a3d] text-slate-300 text-xs font-bold transition-colors">
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-all active:scale-95 flex items-center justify-center gap-1.5">
+                <span className="material-symbols-outlined text-[16px]">
+                  delete
+                </span>
+                <span>Sí, Eliminar</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
