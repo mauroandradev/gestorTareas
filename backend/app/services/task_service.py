@@ -17,10 +17,21 @@ class TaskService:
         project: Optional[str] = None,
         assignee: Optional[str] = None,
         from_date: Optional[str] = None,
-        to_date: Optional[str] = None
+        to_date: Optional[str] = None,
+        user_name: Optional[str] = None,
+        is_admin: bool = False
     ) -> List[Task]:
-        """Fetch tasks matching any optional filter criteria."""
+        """Fetch tasks matching any optional filter criteria with role-based project visibility."""
         query = db.query(Task)
+
+        # Role-based project visibility: non-admins only see tasks in projects they are assigned to
+        if not is_admin and user_name:
+            user_project_rows = db.query(Task.project).filter(Task.assignee.ilike(f"%{user_name.strip()}%")).distinct().all()
+            user_projects = {p[0] for p in user_project_rows if p[0]}
+            if user_projects:
+                query = query.filter(Task.project.in_(user_projects))
+            else:
+                query = query.filter(Task.assignee.ilike(f"%{user_name.strip()}%"))
 
         if search:
             search_fmt = f"%{search.strip()}%"
@@ -43,7 +54,7 @@ class TaskService:
             query = query.filter(Task.project == project)
 
         if assignee and assignee != "Todos":
-            query = query.filter(Task.assignee == assignee)
+            query = query.filter(Task.assignee.ilike(f"%{assignee.strip()}%"))
 
         if from_date:
             query = query.filter(Task.due_date >= from_date)
@@ -64,10 +75,15 @@ class TaskService:
 
     @staticmethod
     def create_task(db: Session, task_in: TaskCreate) -> Task:
-        """Create a new task with formatted dates."""
+        """Create a new task with formatted dates and multiple assignees support."""
         today_str = datetime.now().strftime("%Y-%m-%d")
         completed_at = today_str if task_in.status == "Completada" else None
         start_date = task_in.start_date or today_str
+
+        if task_in.assignees and len(task_in.assignees) > 0:
+            assignee_val = ", ".join([a.strip() for a in task_in.assignees if a.strip()])
+        else:
+            assignee_val = task_in.assignee or "Sin asignar"
 
         task = Task(
             title=task_in.title.strip(),
@@ -75,7 +91,7 @@ class TaskService:
             priority=task_in.priority or "Media",
             status=task_in.status or "Pendiente",
             project=task_in.project or "General",
-            assignee=task_in.assignee or "Sin asignar",
+            assignee=assignee_val,
             start_date=start_date,
             due_date=task_in.due_date,
             completed_at=completed_at
@@ -93,6 +109,11 @@ class TaskService:
             return None
 
         update_data = task_in.model_dump(exclude_unset=True)
+
+        # Handle assignees array if provided
+        if "assignees" in update_data and update_data["assignees"] is not None:
+            assignees_list = update_data.pop("assignees")
+            update_data["assignee"] = ", ".join([a.strip() for a in assignees_list if a.strip()]) if assignees_list else "Sin asignar"
 
         # Handle completion date on status change
         if "status" in update_data:
@@ -158,12 +179,23 @@ class TaskService:
         return deleted_count
 
     @staticmethod
-    def get_stats(db: Session) -> Dict[str, Any]:
-        """Compute aggregated statistics for tasks and projects."""
-        tasks = db.query(Task).all()
-        projects_set = {t.project for t in tasks if t.project}
-        if not projects_set:
-            projects_set = {"Q3 Lanzamiento", "Soporte al Cliente", "Rediseño Web"}
+    def get_stats(db: Session, user_name: Optional[str] = None, is_admin: bool = False) -> Dict[str, Any]:
+        """Compute aggregated statistics for tasks and projects with role-based visibility."""
+        if is_admin or not user_name:
+            tasks = db.query(Task).all()
+            projects_set = {t.project for t in tasks if t.project}
+            if not projects_set:
+                projects_set = {"Q3 Lanzamiento", "Soporte al Cliente", "Rediseño Web"}
+        else:
+            # Non-admin: only projects where the user is an assigned member of tasks
+            user_project_rows = db.query(Task.project).filter(Task.assignee.ilike(f"%{user_name.strip()}%")).distinct().all()
+            user_projects = {p[0] for p in user_project_rows if p[0]}
+            if user_projects:
+                tasks = db.query(Task).filter(Task.project.in_(user_projects)).all()
+                projects_set = user_projects
+            else:
+                tasks = db.query(Task).filter(Task.assignee.ilike(f"%{user_name.strip()}%")).all()
+                projects_set = {t.project for t in tasks if t.project}
 
         project_counts: Dict[str, int] = {}
         for t in tasks:

@@ -18,6 +18,8 @@ def get_tasks(
     assignee: Optional[str] = Query(None, description="Filtrar por responsable"),
     from_date: Optional[str] = Query(None, description="Fecha límite desde (YYYY-MM-DD)"),
     to_date: Optional[str] = Query(None, description="Fecha límite hasta (YYYY-MM-DD)"),
+    user_name: Optional[str] = Query(None, description="Nombre del usuario solicitante"),
+    is_admin: bool = Query(False, description="Si el usuario tiene permisos de administrador"),
     db: Session = Depends(get_db)
 ):
     """Listar todas las tareas con filtros opcionales de estado, prioridad, proyecto y fechas."""
@@ -29,7 +31,9 @@ def get_tasks(
         project=project,
         assignee=assignee,
         from_date=from_date,
-        to_date=to_date
+        to_date=to_date,
+        user_name=user_name,
+        is_admin=is_admin
     )
 
 

@@ -1,6 +1,6 @@
 from typing import Optional, List, Dict
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class TaskBase(BaseModel):
@@ -9,7 +9,8 @@ class TaskBase(BaseModel):
     priority: Optional[str] = Field("Media", description="Prioridad: Baja, Media, Alta, Urgente")
     status: Optional[str] = Field("Pendiente", description="Estado: Pendiente, En Progreso, Completada")
     project: Optional[str] = Field("General", description="Nombre del proyecto vinculado")
-    assignee: Optional[str] = Field("Sin asignar", description="Nombre del responsable asignado")
+    assignee: Optional[str] = Field("Sin asignar", description="Nombre o nombres de los responsables asignados")
+    assignees: Optional[List[str]] = Field(default_factory=list, description="Lista de responsables asignados")
     start_date: Optional[str] = Field(None, description="Fecha de inicio YYYY-MM-DD")
     due_date: Optional[str] = Field(None, description="Fecha límite YYYY-MM-DD")
 
@@ -25,6 +26,7 @@ class TaskUpdate(BaseModel):
     status: Optional[str] = None
     project: Optional[str] = None
     assignee: Optional[str] = None
+    assignees: Optional[List[str]] = None
     start_date: Optional[str] = None
     due_date: Optional[str] = None
     completed_at: Optional[str] = None
@@ -41,6 +43,14 @@ class TaskResponse(TaskBase):
     updated_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def format_assignees(self):
+        if self.assignee and self.assignee != "Sin asignar":
+            self.assignees = [a.strip() for a in self.assignee.split(",") if a.strip()]
+        else:
+            self.assignees = []
+        return self
 
 
 class TaskStatsResponse(BaseModel):

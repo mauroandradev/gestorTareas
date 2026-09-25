@@ -75,7 +75,7 @@ export const AuthAPI = {
 };
 
 export const TaskAPI = {
-  // Obtener tareas con filtros (búsqueda, estado, prioridad, proyecto, fechas)
+  // Obtener tareas con filtros (búsqueda, estado, prioridad, proyecto, fechas, usuario)
   getTasks: async (filters = {}) => {
     const params = new URLSearchParams();
     if (filters.search) params.append("search", filters.search);
@@ -89,14 +89,21 @@ export const TaskAPI = {
       params.append("assignee", filters.assignee);
     if (filters.fromDate) params.append("from_date", filters.fromDate);
     if (filters.toDate) params.append("to_date", filters.toDate);
+    if (filters.user_name) params.append("user_name", filters.user_name);
+    if (filters.is_admin !== undefined) params.append("is_admin", String(filters.is_admin));
 
     const res = await fetch(`${API_BASE_URL}/tasks?${params.toString()}`);
     return res.json();
   },
 
-  // Obtener estadísticas rápidas y lista de proyectos
-  getStats: async () => {
-    const res = await fetch(`${API_BASE_URL}/stats`);
+  // Obtener estadísticas rápidas y lista de proyectos con permisos
+  getStats: async (options = {}) => {
+    const params = new URLSearchParams();
+    if (options.user_name) params.append("user_name", options.user_name);
+    if (options.is_admin !== undefined) params.append("is_admin", String(options.is_admin));
+
+    const queryStr = params.toString() ? `?${params.toString()}` : "";
+    const res = await fetch(`${API_BASE_URL}/stats${queryStr}`);
     return res.json();
   },
 

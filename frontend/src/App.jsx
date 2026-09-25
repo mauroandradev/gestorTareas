@@ -46,6 +46,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("Todas");
   const [priorityFilter, setPriorityFilter] = useState("Todas");
+  const [assigneeFilter, setAssigneeFilter] = useState("Todas");
 
   // Date Filters
   const [datePreset, setDatePreset] = useState("all"); // 'all', 'today', 'week', 'month', 'overdue', 'custom'
@@ -71,6 +72,7 @@ export default function App() {
     priority: "Media",
     status: "Pendiente",
     project: "Q3 Lanzamiento",
+    assignees: ["Administrador Principal"],
     assignee: "Administrador Principal",
     start_date: "",
     due_date: "",
@@ -125,13 +127,24 @@ export default function App() {
   const [deletedProjects, setDeletedProjects] = useState([]);
   const [customProjects, setCustomProjects] = useState([]);
 
-  // Merge unique project names excluding any deleted projects
-  const projectList = Array.from(
-    new Set([
-      ...defaultProjects,
-      ...customProjects,
-      ...(stats.proyectos || []),
-    ]),
+  // Check if current user has Admin privileges
+  const isAdmin = Boolean(
+    currentUser?.is_admin || currentUser?.role === "Administrador",
+  );
+
+  // Merge unique project names based on role permissions:
+  // Admins see all existing, default and custom projects;
+  // Regular users see ONLY the projects they are assigned to (stats.proyectos).
+  const projectList = (
+    isAdmin
+      ? Array.from(
+          new Set([
+            ...defaultProjects,
+            ...customProjects,
+            ...(stats.proyectos || []),
+          ]),
+        )
+      : Array.from(new Set(stats.proyectos || []))
   ).filter((p) => !deletedProjects.includes(p));
 
   const priorities = ["Baja", "Media", "Alta", "Urgente"];
@@ -200,10 +213,16 @@ export default function App() {
           status: statusFilter,
           project: currentProject,
           priority: priorityFilter,
+          assignee: assigneeFilter !== "Todas" ? assigneeFilter : undefined,
           fromDate: dateParams.from,
           toDate: dateParams.overdueOnly ? "" : dateParams.to,
+          user_name: currentUser.name,
+          is_admin: isAdmin,
         }),
-        TaskAPI.getStats(),
+        TaskAPI.getStats({
+          user_name: currentUser.name,
+          is_admin: isAdmin,
+        }),
         AuthAPI.getUsers().catch(() => []),
         RoleAPI.getRoles().catch(() => []),
       ]);
@@ -227,6 +246,7 @@ export default function App() {
           completadas: 0,
           urgentes: 0,
           proyectos: [],
+          project_counts: {},
         },
       );
       setUsers(usersData || []);
@@ -248,6 +268,7 @@ export default function App() {
     currentProject,
     statusFilter,
     priorityFilter,
+    assigneeFilter,
     datePreset,
     fromDate,
     toDate,
@@ -262,6 +283,7 @@ export default function App() {
     setSearch("");
     setStatusFilter("Todas");
     setPriorityFilter("Todas");
+    setAssigneeFilter("Todas");
     setDatePreset("all");
     setFromDate("");
     setToDate("");
@@ -559,21 +581,26 @@ export default function App() {
   const handleOpenCreate = (prefilledDate = null) => {
     setEditingTask(null);
     const today = new Date().toISOString().split("T")[0];
-    const defaultAssignee =
+    const defaultAssigneeList =
       users.length > 0
-        ? users[0].name
-        : currentUser?.name || "Administrador Principal";
+        ? [users[0].name]
+        : currentUser?.name
+          ? [currentUser.name]
+          : ["Administrador Principal"];
+
+    const selectedProj =
+      currentProject !== "Todos" && projectList.includes(currentProject)
+        ? currentProject
+        : projectList[0] || (isAdmin ? "Q3 Lanzamiento" : "General");
 
     setFormData({
       title: "",
       description: "",
       priority: "Media",
       status: "Pendiente",
-      project:
-        currentProject !== "Todos"
-          ? currentProject
-          : projectList[0] || "Q3 Lanzamiento",
-      assignee: defaultAssignee,
+      project: selectedProj,
+      assignees: defaultAssigneeList,
+      assignee: defaultAssigneeList.join(", "),
       start_date: today,
       due_date: prefilledDate || today,
     });
@@ -582,13 +609,27 @@ export default function App() {
 
   const handleOpenEdit = (task) => {
     setEditingTask(task);
+    let parsedAssignees = [];
+    if (Array.isArray(task.assignees) && task.assignees.length > 0) {
+      parsedAssignees = task.assignees;
+    } else if (task.assignee) {
+      parsedAssignees = task.assignee
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+    if (parsedAssignees.length === 0 && users.length > 0) {
+      parsedAssignees = [users[0].name];
+    }
+
     setFormData({
       title: task.title,
       description: task.description || "",
       priority: task.priority || "Media",
       status: task.status || "Pendiente",
       project: task.project || "General",
-      assignee: task.assignee || "Sin asignar",
+      assignees: parsedAssignees,
+      assignee: parsedAssignees.join(", "),
       start_date: task.start_date || "",
       due_date: task.due_date || "",
     });
@@ -601,13 +642,23 @@ export default function App() {
       showToast("El título de la tarea es obligatorio", "error");
       return;
     }
+    if (!formData.assignees || formData.assignees.length === 0) {
+      showToast("Debes asignar al menos un responsable a la tarea", "error");
+      return;
+    }
+
+    const payload = {
+      ...formData,
+      assignees: formData.assignees,
+      assignee: formData.assignees.join(", "),
+    };
 
     try {
       if (editingTask) {
-        await TaskAPI.updateTask(editingTask.id, formData);
+        await TaskAPI.updateTask(editingTask.id, payload);
         showToast("Tarea actualizada correctamente");
       } else {
-        await TaskAPI.createTask(formData);
+        await TaskAPI.createTask(payload);
         showToast("Tarea creada exitosamente");
       }
       setIsModalOpen(false);
@@ -813,10 +864,76 @@ export default function App() {
     }
   };
 
+  // ----------------- MULTI-ASSIGNEE AVATARS & PARSING HELPERS -----------------
+  const parseAssignees = (task) => {
+    if (Array.isArray(task?.assignees) && task.assignees.length > 0) {
+      return task.assignees;
+    }
+    if (task?.assignee) {
+      return task.assignee
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+    return [];
+  };
+
+  const renderAssigneeAvatars = (task, maxShow = 3, showNames = true) => {
+    const list = parseAssignees(task);
+    if (list.length === 0) {
+      return (
+        <span className="text-slate-500 italic text-[11px]">Sin asignar</span>
+      );
+    }
+
+    const visible = list.slice(0, maxShow);
+    const extraCount = list.length - maxShow;
+
+    const colors = [
+      "bg-indigo-950 border-indigo-400/40 text-indigo-200",
+      "bg-emerald-950 border-emerald-400/40 text-emerald-200",
+      "bg-purple-950 border-purple-400/40 text-purple-200",
+      "bg-amber-950 border-amber-400/40 text-amber-200",
+      "bg-cyan-950 border-cyan-400/40 text-cyan-200",
+      "bg-rose-950 border-rose-400/40 text-rose-200",
+    ];
+
+    return (
+      <div className="flex items-center gap-1.5 min-w-0" title={list.join(", ")}>
+        <div className="flex -space-x-1.5 items-center shrink-0">
+          {visible.map((name, idx) => {
+            const colorClass = colors[idx % colors.length];
+            return (
+              <div
+                key={idx}
+                className={`w-5 h-5 rounded-full border flex items-center justify-center text-[9px] font-bold shadow-sm ${colorClass}`}
+                title={name}>
+                {name.charAt(0).toUpperCase()}
+              </div>
+            );
+          })}
+          {extraCount > 0 && (
+            <div
+              className="w-5 h-5 rounded-full bg-slate-800 border border-slate-600 flex items-center justify-center text-[8px] font-bold text-slate-300 shadow-sm"
+              title={`+${extraCount} más: ${list.slice(maxShow).join(", ")}`}>
+              +{extraCount}
+            </div>
+          )}
+        </div>
+        {showNames && (
+          <span className="text-[11px] text-slate-300 font-medium truncate max-w-[130px]">
+            {list.length === 1 ? list[0] : `${list.length} asignados`}
+          </span>
+        )}
+      </div>
+    );
+  };
+
   const hasActiveFilters =
     search ||
     statusFilter !== "Todas" ||
     priorityFilter !== "Todas" ||
+    assigneeFilter !== "Todas" ||
     datePreset !== "all" ||
     fromDate ||
     toDate;
@@ -1188,87 +1305,101 @@ export default function App() {
             <div className="flex flex-col gap-1">
               <div className="flex items-center justify-between px-2 mb-1">
                 <span className="text-[11px] font-extrabold uppercase text-slate-400 tracking-wider">
-                  Proyectos
+                  {isAdmin ? "Todos los Proyectos" : "Mis Proyectos Asignados"}
                 </span>
-                <button
-                  onClick={() => setIsNewProjectModalOpen(true)}
-                  className="text-indigo-400 hover:text-indigo-300 text-xs font-bold flex items-center gap-0.5"
-                  title="Crear nuevo proyecto">
-                  <span className="material-symbols-outlined text-[14px]">
-                    add
-                  </span>
-                  <span>Nuevo</span>
-                </button>
+                {isAdmin && (
+                  <button
+                    onClick={() => setIsNewProjectModalOpen(true)}
+                    className="text-indigo-400 hover:text-indigo-300 text-xs font-bold flex items-center gap-0.5"
+                    title="Crear nuevo proyecto">
+                    <span className="material-symbols-outlined text-[14px]">
+                      add
+                    </span>
+                    <span>Nuevo</span>
+                  </button>
+                )}
               </div>
 
-              {projectList.map((proj) => {
-                const isSelected = currentProject === proj;
-                const projCount = stats.project_counts?.[proj] ?? 0;
+              {projectList.length === 0 ? (
+                <div className="px-3 py-4 text-center text-xs text-slate-400 italic bg-[#060e20] rounded-xl border border-[#222a3d]">
+                  {isAdmin
+                    ? "No hay proyectos creados."
+                    : "No tienes proyectos asignados actualmente."}
+                </div>
+              ) : (
+                projectList.map((proj) => {
+                  const isSelected = currentProject === proj;
+                  const projCount = stats.project_counts?.[proj] ?? 0;
 
-                return (
-                  <div
-                    key={proj}
-                    className={`group w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-all ${
-                      isSelected
-                        ? "bg-indigo-600 text-white font-bold shadow-md shadow-indigo-600/20"
-                        : "text-slate-300 hover:bg-[#131b2e]"
-                    }`}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCurrentProject(proj);
-                        setIsMobileMenuOpen(false);
-                      }}
-                      className="flex items-center gap-2 truncate flex-1 text-left">
-                      <span
-                        className={`w-2 h-2 rounded-full shrink-0 ${isSelected ? "bg-white" : "bg-indigo-400"}`}></span>
-                      <span className="truncate">{proj}</span>
-                    </button>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <span
-                        className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
-                          isSelected
-                            ? "bg-white/20 text-white"
-                            : "bg-[#171f33] text-slate-400"
-                        }`}>
-                        {projCount}
-                      </span>
+                  return (
+                    <div
+                      key={proj}
+                      className={`group w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-all ${
+                        isSelected
+                          ? "bg-indigo-600 text-white font-bold shadow-md shadow-indigo-600/20"
+                          : "text-slate-300 hover:bg-[#131b2e]"
+                      }`}>
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleOpenEditProject(proj);
+                        onClick={() => {
+                          setCurrentProject(proj);
+                          setIsMobileMenuOpen(false);
                         }}
-                        className={`p-1 rounded-lg transition-all ${
-                          isSelected
-                            ? "text-white/80 hover:text-white hover:bg-white/20"
-                            : "text-slate-500 hover:text-amber-300 hover:bg-amber-500/10 md:opacity-0 md:group-hover:opacity-100"
-                        }`}
-                        title={`Modificar/Renombrar proyecto "${proj}"`}>
-                        <span className="material-symbols-outlined text-[15px]">
-                          edit
-                        </span>
+                        className="flex items-center gap-2 truncate flex-1 text-left">
+                        <span
+                          className={`w-2 h-2 rounded-full shrink-0 ${isSelected ? "bg-white" : "bg-indigo-400"}`}></span>
+                        <span className="truncate">{proj}</span>
                       </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openDeleteProjectModal(proj, projCount);
-                        }}
-                        className={`p-1 rounded-lg transition-all ${
-                          isSelected
-                            ? "text-white/80 hover:text-white hover:bg-white/20"
-                            : "text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 md:opacity-0 md:group-hover:opacity-100"
-                        }`}
-                        title={`Eliminar proyecto "${proj}"`}>
-                        <span className="material-symbols-outlined text-[15px]">
-                          delete
+                      <div className="flex items-center gap-1 shrink-0">
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
+                            isSelected
+                              ? "bg-white/20 text-white"
+                              : "bg-[#171f33] text-slate-400"
+                          }`}>
+                          {projCount}
                         </span>
-                      </button>
+                        {isAdmin && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenEditProject(proj);
+                              }}
+                              className={`p-1 rounded-lg transition-all ${
+                                isSelected
+                                  ? "text-white/80 hover:text-white hover:bg-white/20"
+                                  : "text-slate-500 hover:text-amber-300 hover:bg-amber-500/10 md:opacity-0 md:group-hover:opacity-100"
+                              }`}
+                              title={`Modificar/Renombrar proyecto "${proj}"`}>
+                              <span className="material-symbols-outlined text-[15px]">
+                                edit
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openDeleteProjectModal(proj, projCount);
+                              }}
+                              className={`p-1 rounded-lg transition-all ${
+                                isSelected
+                                  ? "text-white/80 hover:text-white hover:bg-white/20"
+                                  : "text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 md:opacity-0 md:group-hover:opacity-100"
+                              }`}
+                              title={`Eliminar proyecto "${proj}"`}>
+                              <span className="material-symbols-outlined text-[15px]">
+                                delete
+                              </span>
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
 
             {/* Quick Metrics in Sidebar */}
@@ -1427,6 +1558,26 @@ export default function App() {
                     {priorities.map((p) => (
                       <option key={p} value={p}>
                         {p}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Assignee Filter */}
+                <div className="flex items-center gap-1 bg-[#060e20] px-2.5 py-1 rounded-xl border border-[#2d3449]">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase">
+                    Responsable:
+                  </span>
+                  <select
+                    value={assigneeFilter}
+                    onChange={(e) => setAssigneeFilter(e.target.value)}
+                    className="bg-transparent text-xs text-slate-200 py-1 pl-1 pr-2 focus:outline-none cursor-pointer font-semibold max-w-[130px] truncate">
+                    <option value="Todas" className="bg-[#131b2e]">
+                      Todos
+                    </option>
+                    {users.map((u) => (
+                      <option key={u.id} value={u.name} className="bg-[#131b2e]">
+                        {u.name}
                       </option>
                     ))}
                   </select>
@@ -1605,20 +1756,11 @@ export default function App() {
                                 )}
                               </div>
 
-                              {/* 4. Footer (Fixed 26px height): Assignee & Action Shortcuts */}
+                              {/* 4. Footer (Fixed 26px height): Multi-Assignees & Action Shortcuts */}
                               <div className="h-[26px] min-h-[26px] max-h-[26px] flex items-center justify-between text-xs text-slate-400 pt-1">
-                                <div className="flex items-center gap-1.5 truncate">
-                                  <div className="w-5 h-5 rounded-full bg-indigo-900 border border-indigo-400/40 flex items-center justify-center text-[10px] font-bold text-indigo-200 shrink-0">
-                                    {task.assignee
-                                      ? task.assignee.charAt(0)
-                                      : "?"}
-                                  </div>
-                                  <span className="text-[11px] text-slate-300 font-medium truncate max-w-[110px]">
-                                    {task.assignee || "Sin asignar"}
-                                  </span>
-                                </div>
+                                {renderAssigneeAvatars(task, 2, true)}
 
-                                <div className="flex items-center gap-1">
+                                <div className="flex items-center gap-1 shrink-0">
                                   <button
                                     onClick={() => handleOpenEdit(task)}
                                     className="p-1 text-slate-400 hover:text-white transition-colors"
@@ -1758,16 +1900,9 @@ export default function App() {
                             )}
                           </div>
 
-                          {/* Footer: Assignee & Action Buttons */}
+                          {/* Footer: Multi-Assignees & Action Buttons */}
                           <div className="flex items-center justify-between text-xs text-slate-300 pt-1 flex-wrap gap-2">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <div className="w-5 h-5 rounded-full bg-indigo-950 border border-indigo-400/40 flex items-center justify-center text-[10px] font-bold text-indigo-200 shrink-0">
-                                {task.assignee ? task.assignee.charAt(0) : "?"}
-                              </div>
-                              <span className="text-[11px] text-slate-200 font-medium truncate max-w-[140px]">
-                                {task.assignee || "Sin asignar"}
-                              </span>
-                            </div>
+                            {renderAssigneeAvatars(task, 3, true)}
 
                             <div className="flex items-center gap-1 shrink-0">
                               {task.status !== "Completada" && (
@@ -1814,7 +1949,7 @@ export default function App() {
                         <tr>
                           <th className="py-3.5 px-4">Tarea / Título</th>
                           <th className="py-3.5 px-4">Proyecto</th>
-                          <th className="py-3.5 px-4">Responsable</th>
+                          <th className="py-3.5 px-4">Responsables</th>
                           <th className="py-3.5 px-4">Prioridad</th>
                           <th className="py-3.5 px-4">Fecha Inicio</th>
                           <th className="py-3.5 px-4">Fecha Límite</th>
@@ -1855,16 +1990,9 @@ export default function App() {
                                 </span>
                               </td>
 
-                              {/* Assignee */}
-                              <td className="py-3.5 px-4 text-slate-200 font-medium">
-                                <div className="flex items-center gap-1.5">
-                                  <div className="w-5 h-5 rounded-full bg-indigo-950 border border-indigo-400/40 flex items-center justify-center text-[10px] font-bold text-indigo-200 shrink-0">
-                                    {task.assignee
-                                      ? task.assignee.charAt(0)
-                                      : "?"}
-                                  </div>
-                                  <span>{task.assignee}</span>
-                                </div>
+                              {/* Multi-Assignees */}
+                              <td className="py-3.5 px-4 text-slate-200 font-medium max-w-[220px]">
+                                {renderAssigneeAvatars(task, 3, true)}
                               </td>
 
                               {/* Priority */}
@@ -2131,7 +2259,7 @@ export default function App() {
                           </span>
                         </div>
                         <div className="flex items-center justify-between text-[11px] text-slate-400">
-                          <span>👤 {task.assignee}</span>
+                          {renderAssigneeAvatars(task, 2, true)}
                           <span className="text-indigo-400 font-semibold">
                             {task.status}
                           </span>
@@ -2214,46 +2342,145 @@ export default function App() {
                   className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 transition-colors resize-none"></textarea>
               </div>
 
-              {/* Project & Assignee */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="flex flex-col gap-1">
-                  <label className="font-bold text-slate-300">Proyecto</label>
-                  <select
-                    value={formData.project}
-                    onChange={(e) =>
-                      setFormData({ ...formData, project: e.target.value })
-                    }
-                    className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 cursor-pointer">
-                    {projectList.map((p) => (
+              {/* Project Selection */}
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-300">Proyecto</label>
+                <select
+                  value={formData.project}
+                  onChange={(e) =>
+                    setFormData({ ...formData, project: e.target.value })
+                  }
+                  className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 cursor-pointer">
+                  {projectList.length > 0 ? (
+                    projectList.map((p) => (
                       <option key={p} value={p}>
                         {p}
                       </option>
-                    ))}
-                  </select>
+                    ))
+                  ) : (
+                    <option value={formData.project || "General"}>
+                      {formData.project || "General"}
+                    </option>
+                  )}
+                </select>
+              </div>
+
+              {/* Multiple Assignees Selection */}
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-slate-300 flex items-center gap-1.5">
+                    <span>Responsables Asignados</span>
+                    <span className="text-[11px] font-normal text-indigo-400">
+                      ({formData.assignees?.length || 0} seleccionados)
+                    </span>
+                  </label>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const allNames = users.length > 0 ? users.map((u) => u.name) : ["Administrador Principal"];
+                        setFormData({
+                          ...formData,
+                          assignees: allNames,
+                          assignee: allNames.join(", "),
+                        });
+                      }}
+                      className="text-indigo-400 hover:text-indigo-300 font-semibold hover:underline">
+                      Todos
+                    </button>
+                    <span className="text-slate-600">•</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData({
+                          ...formData,
+                          assignees: [],
+                          assignee: "",
+                        });
+                      }}
+                      className="text-slate-400 hover:text-slate-300 hover:underline">
+                      Desmarcar
+                    </button>
+                  </div>
                 </div>
 
-                <div className="flex flex-col gap-1">
-                  <label className="font-bold text-slate-300">
-                    Responsable
-                  </label>
-                  <select
-                    value={formData.assignee}
-                    onChange={(e) =>
-                      setFormData({ ...formData, assignee: e.target.value })
-                    }
-                    className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 cursor-pointer">
-                    {users.length > 0 ? (
-                      users.map((u) => (
-                        <option key={u.id} value={u.name}>
-                          {u.name} ({u.role})
-                        </option>
-                      ))
-                    ) : (
-                      <option value="Administrador Principal">
-                        Administrador Principal
-                      </option>
-                    )}
-                  </select>
+                {/* Selected Assignee Chips */}
+                {formData.assignees && formData.assignees.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5 p-2 bg-[#060e20] border border-[#2d3449] rounded-xl max-h-[72px] overflow-y-auto">
+                    {formData.assignees.map((name) => (
+                      <span
+                        key={name}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-indigo-950 border border-indigo-500/40 text-indigo-200 text-xs font-semibold animate-in fade-in">
+                        <span>{name}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = formData.assignees.filter((n) => n !== name);
+                            setFormData({
+                              ...formData,
+                              assignees: updated,
+                              assignee: updated.join(", "),
+                            });
+                          }}
+                          className="hover:text-rose-400 transition-colors ml-0.5 font-bold"
+                          title={`Quitar a ${name}`}>
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-2 bg-[#060e20] border border-amber-500/30 rounded-xl text-amber-300/80 text-[11px] italic">
+                    ⚠️ Selecciona al menos un responsable del equipo abajo.
+                  </div>
+                )}
+
+                {/* Member Checklist */}
+                <div className="max-h-[140px] overflow-y-auto border border-[#222a3d] rounded-xl bg-[#060e20] p-1.5 flex flex-col gap-1">
+                  {users.length > 0 ? (
+                    users.map((u) => {
+                      const isChecked = formData.assignees?.includes(u.name);
+                      return (
+                        <label
+                          key={u.id}
+                          className={`flex items-center justify-between p-1.5 rounded-lg cursor-pointer transition-colors text-xs ${
+                            isChecked
+                              ? "bg-indigo-950/60 border border-indigo-500/30 text-white font-medium"
+                              : "hover:bg-[#131b2e] text-slate-300 border border-transparent"
+                          }`}>
+                          <div className="flex items-center gap-2 truncate">
+                            <input
+                              type="checkbox"
+                              checked={isChecked || false}
+                              onChange={() => {
+                                const current = formData.assignees || [];
+                                const updated = isChecked
+                                  ? current.filter((n) => n !== u.name)
+                                  : [...current, u.name];
+                                setFormData({
+                                  ...formData,
+                                  assignees: updated,
+                                  assignee: updated.join(", "),
+                                });
+                              }}
+                              className="rounded border-[#2d3449] bg-[#0b1326] text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer"
+                            />
+                            <div className="w-5 h-5 rounded-full bg-indigo-900 border border-indigo-400/40 flex items-center justify-center text-[10px] font-bold text-indigo-200 shrink-0">
+                              {u.name.charAt(0)}
+                            </div>
+                            <span className="truncate">{u.name}</span>
+                          </div>
+                          <span className="text-[10px] text-slate-400 bg-[#131b2e] px-1.5 py-0.5 rounded font-medium shrink-0 ml-2">
+                            {u.role}
+                          </span>
+                        </label>
+                      );
+                    })
+                  ) : (
+                    <div className="text-slate-500 text-center py-2 italic text-[11px]">
+                      No hay usuarios registrados
+                    </div>
+                  )}
                 </div>
               </div>
 
