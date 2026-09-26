@@ -217,10 +217,12 @@ export default function App() {
   };
 
   // ----------------- DATA LOADING -----------------
-  const loadData = async () => {
+  const loadData = async (showSpinner = true) => {
     if (!currentUser) return;
     try {
-      setLoading(true);
+      if (showSpinner) {
+        setLoading(true);
+      }
       const dateParams = getDateRange();
 
       const [taskList, statsData, usersData, rolesData, projectsData] =
@@ -276,7 +278,9 @@ export default function App() {
       console.error(err);
       showToast("Error de conexión con el servidor", "error");
     } finally {
-      setLoading(false);
+      if (showSpinner) {
+        setLoading(false);
+      }
     }
   };
 
@@ -744,15 +748,66 @@ export default function App() {
   };
 
   const handleStatusChange = async (taskId, newStatus) => {
+    const taskToUpdate = tasks.find((t) => t.id === taskId);
+    if (!taskToUpdate || taskToUpdate.status === newStatus) return;
+
+    const oldStatus = taskToUpdate.status;
+    const oldCompletedAt = taskToUpdate.completed_at;
+    const todayStr = new Date().toISOString().split("T")[0];
+    const newCompletedAt =
+      newStatus === "Completada" ? oldCompletedAt || todayStr : null;
+
+    // 1. Instant Optimistic State Update (0ms delay)
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === taskId
+          ? { ...t, status: newStatus, completed_at: newCompletedAt }
+          : t,
+      ),
+    );
+
+    // Optimistically update quick metrics counters
+    setStats((prev) => {
+      const updated = { ...prev };
+      const statusMap = {
+        Pendiente: "pendientes",
+        "En Progreso": "en_progreso",
+        Completada: "completadas",
+      };
+      if (statusMap[oldStatus] && updated[statusMap[oldStatus]] > 0) {
+        updated[statusMap[oldStatus]]--;
+      }
+      if (statusMap[newStatus]) {
+        updated[statusMap[newStatus]] = (updated[statusMap[newStatus]] || 0) + 1;
+      }
+      return updated;
+    });
+
+    showToast(`Tarea movida a "${newStatus}"`);
+
+    // 2. Perform backend update silently in background
     try {
       await TaskAPI.updateStatus(taskId, newStatus);
-      showToast(`Tarea movida a "${newStatus}"`);
-      loadData();
+      // Background silent stats reload (no spinner, no lag)
+      TaskAPI.getStats({
+        user_name: currentUser.name,
+        is_admin: isAdmin,
+      }).then((freshStats) => {
+        if (freshStats) setStats(freshStats);
+      });
     } catch (err) {
-      showToast("Error al actualizar el estado", "error");
+      // Rollback to original state on network error
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === taskId
+            ? { ...t, status: oldStatus, completed_at: oldCompletedAt }
+            : t,
+        ),
+      );
+      showToast("Error de conexión al actualizar el estado", "error");
+      loadData(false);
     }
   };
-
 
   // ----------------- DRAG & DROP HANDLERS -----------------
   const handleDragStart = (e, taskId) => {
@@ -782,7 +837,7 @@ export default function App() {
 
     const task = tasks.find((t) => t.id === taskId);
     if (task && task.status !== targetStatus) {
-      await handleStatusChange(taskId, targetStatus);
+      handleStatusChange(taskId, targetStatus);
     }
     setDraggedTaskId(null);
   };
@@ -833,13 +888,13 @@ export default function App() {
   const getPriorityBadge = (priority) => {
     switch (priority) {
       case "Urgente":
-        return "bg-rose-500/20 text-rose-300 border-rose-500/30";
+        return "bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-500/20 dark:text-rose-300 dark:border-rose-500/30 font-bold";
       case "Alta":
-        return "bg-amber-500/20 text-amber-300 border-amber-500/30";
+        return "bg-amber-100 text-amber-900 border-amber-300 dark:bg-amber-500/20 dark:text-amber-300 dark:border-amber-500/30 font-bold";
       case "Media":
-        return "bg-blue-500/20 text-blue-300 border-blue-500/30";
+        return "bg-blue-100 text-blue-900 border-blue-300 dark:bg-blue-500/20 dark:text-blue-300 dark:border-blue-500/30 font-bold";
       default:
-        return "bg-slate-500/20 text-slate-300 border-slate-500/30";
+        return "bg-slate-100 text-slate-800 border-slate-300 dark:bg-slate-500/20 dark:text-slate-300 dark:border-slate-500/30 font-bold";
     }
   };
 
@@ -848,31 +903,34 @@ export default function App() {
     switch (status) {
       case "Pendiente":
         return {
-          cardBg: "bg-[#1e1910]",
-          border: "border-amber-500/50 hover:border-amber-400",
-          accent: "text-amber-400",
-          glow: "hover:shadow-[0_0_15px_rgba(251,191,36,0.25)]",
+          cardBg: "bg-white dark:bg-[#1e1910]",
+          border:
+            "border-amber-300 hover:border-amber-500 dark:border-amber-500/50 dark:hover:border-amber-400",
+          accent: "text-amber-700 dark:text-amber-400",
+          glow: "hover:shadow-md hover:shadow-amber-500/15 dark:hover:shadow-[0_0_15px_rgba(251,191,36,0.25)]",
         };
       case "En Progreso":
         return {
-          cardBg: "bg-[#0f1d2e]",
-          border: "border-cyan-500/50 hover:border-cyan-400",
-          accent: "text-cyan-400",
-          glow: "hover:shadow-[0_0_15px_rgba(34,211,238,0.25)]",
+          cardBg: "bg-white dark:bg-[#0f1d2e]",
+          border:
+            "border-cyan-300 hover:border-cyan-500 dark:border-cyan-500/50 dark:hover:border-cyan-400",
+          accent: "text-cyan-700 dark:text-cyan-400",
+          glow: "hover:shadow-md hover:shadow-cyan-500/15 dark:hover:shadow-[0_0_15px_rgba(34,211,238,0.25)]",
         };
       case "Completada":
         return {
-          cardBg: "bg-[#0e241c]",
-          border: "border-emerald-500/50 hover:border-emerald-400",
-          accent: "text-emerald-400",
-          glow: "hover:shadow-[0_0_15px_rgba(52,211,153,0.25)]",
+          cardBg: "bg-white dark:bg-[#0e241c]",
+          border:
+            "border-emerald-300 hover:border-emerald-500 dark:border-emerald-500/50 dark:hover:border-emerald-400",
+          accent: "text-emerald-700 dark:text-emerald-400",
+          glow: "hover:shadow-md hover:shadow-emerald-500/15 dark:hover:shadow-[0_0_15px_rgba(52,211,153,0.25)]",
         };
       default:
         return {
-          cardBg: "bg-[#131b2e]",
-          border: "border-[#2d3449]",
-          accent: "text-slate-300",
-          glow: "",
+          cardBg: "bg-white dark:bg-[#131b2e]",
+          border: "border-slate-200 dark:border-[#2d3449]",
+          accent: "text-slate-700 dark:text-slate-300",
+          glow: "hover:shadow-md",
         };
     }
   };
@@ -883,42 +941,52 @@ export default function App() {
       case "Pendiente":
         return {
           rowClass:
-            "border-l-[6px] border-l-amber-400 bg-[#231a0b] hover:bg-[#2d210e] border-b border-[#3d2b0e]",
-          dotColor: "bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)]",
-          titleColor: "text-amber-100 hover:text-amber-300 font-bold",
-          projectBadge: "bg-[#171005] text-amber-200 border-amber-500/40",
-          dateColor: "text-amber-200/80",
+            "border-l-[6px] border-l-amber-500 bg-amber-50/60 hover:bg-amber-100/70 border-b border-amber-200/80 dark:border-l-amber-400 dark:bg-[#231a0b] dark:hover:bg-[#2d210e] dark:border-b dark:border-[#3d2b0e]",
+          dotColor:
+            "bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.8)] dark:bg-amber-400 dark:shadow-[0_0_8px_rgba(251,191,36,0.8)]",
+          titleColor:
+            "text-amber-950 hover:text-amber-700 font-bold dark:text-amber-100 dark:hover:text-amber-300",
+          projectBadge:
+            "bg-amber-100/90 text-amber-900 border-amber-300 dark:bg-[#171005] dark:text-amber-200 dark:border-amber-500/40",
+          dateColor: "text-amber-900/90 dark:text-amber-200/80",
           statusTooltip: "Pendiente",
         };
       case "En Progreso":
         return {
           rowClass:
-            "border-l-[6px] border-l-cyan-400 bg-[#0a233a] hover:bg-[#0e2f4e] border-b border-[#143c5e]",
-          dotColor: "bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)]",
-          titleColor: "text-cyan-100 hover:text-cyan-300 font-bold",
-          projectBadge: "bg-[#051524] text-cyan-200 border-cyan-500/40",
-          dateColor: "text-cyan-200/80",
+            "border-l-[6px] border-l-cyan-600 bg-cyan-50/60 hover:bg-cyan-100/70 border-b border-cyan-200/80 dark:border-l-cyan-400 dark:bg-[#0a233a] dark:hover:bg-[#0e2f4e] dark:border-b dark:border-[#143c5e]",
+          dotColor:
+            "bg-cyan-600 shadow-[0_0_8px_rgba(8,145,178,0.8)] dark:bg-cyan-400 dark:shadow-[0_0_8px_rgba(34,211,238,0.8)]",
+          titleColor:
+            "text-cyan-950 hover:text-cyan-700 font-bold dark:text-cyan-100 dark:hover:text-cyan-300",
+          projectBadge:
+            "bg-cyan-100/90 text-cyan-900 border-cyan-300 dark:bg-[#051524] dark:text-cyan-200 dark:border-cyan-500/40",
+          dateColor: "text-cyan-900/90 dark:text-cyan-200/80",
           statusTooltip: "En Progreso",
         };
       case "Completada":
         return {
           rowClass:
-            "border-l-[6px] border-l-emerald-400 bg-[#09281a] hover:bg-[#0e3523] border-b border-[#154632]",
-          dotColor: "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]",
+            "border-l-[6px] border-l-emerald-600 bg-emerald-50/60 hover:bg-emerald-100/70 border-b border-emerald-200/80 dark:border-l-emerald-400 dark:bg-[#09281a] dark:hover:bg-[#0e3523] dark:border-b dark:border-[#154632]",
+          dotColor:
+            "bg-emerald-600 shadow-[0_0_8px_rgba(5,150,105,0.8)] dark:bg-emerald-400 dark:shadow-[0_0_8px_rgba(52,211,153,0.8)]",
           titleColor:
-            "text-emerald-200 line-through opacity-85 hover:text-emerald-300 font-semibold",
-          projectBadge: "bg-[#041910] text-emerald-200 border-emerald-500/40",
-          dateColor: "text-emerald-300/80",
+            "text-emerald-950 line-through opacity-85 hover:text-emerald-700 font-semibold dark:text-emerald-200 dark:hover:text-emerald-300",
+          projectBadge:
+            "bg-emerald-100/90 text-emerald-900 border-emerald-300 dark:bg-[#041910] dark:text-emerald-200 dark:border-emerald-500/40",
+          dateColor: "text-emerald-900/90 dark:text-emerald-300/80",
           statusTooltip: "Completada",
         };
       default:
         return {
           rowClass:
-            "border-l-[6px] border-l-slate-600 bg-[#0b1326] hover:bg-[#131b2e] border-b border-[#222a3d]",
-          dotColor: "bg-slate-400",
-          titleColor: "text-white hover:text-indigo-400 font-bold",
-          projectBadge: "bg-[#060e20] text-indigo-300 border-[#222a3d]",
-          dateColor: "text-slate-400",
+            "border-l-[6px] border-l-slate-400 bg-white hover:bg-slate-50 border-b border-slate-200 dark:border-l-slate-600 dark:bg-[#0b1326] dark:hover:bg-[#131b2e] dark:border-b dark:border-[#222a3d]",
+          dotColor: "bg-slate-500 dark:bg-slate-400",
+          titleColor:
+            "text-slate-900 hover:text-indigo-600 font-bold dark:text-white dark:hover:text-indigo-400",
+          projectBadge:
+            "bg-slate-100 text-slate-800 border-slate-200 dark:bg-[#060e20] dark:text-indigo-300 dark:border-[#222a3d]",
+          dateColor: "text-slate-600 dark:text-slate-400",
           statusTooltip: "Sin estado",
         };
     }
@@ -950,12 +1018,12 @@ export default function App() {
     const extraCount = list.length - maxShow;
 
     const colors = [
-      "bg-indigo-950 border-indigo-400/40 text-indigo-200",
-      "bg-emerald-950 border-emerald-400/40 text-emerald-200",
-      "bg-purple-950 border-purple-400/40 text-purple-200",
-      "bg-amber-950 border-amber-400/40 text-amber-200",
-      "bg-cyan-950 border-cyan-400/40 text-cyan-200",
-      "bg-rose-950 border-rose-400/40 text-rose-200",
+      "bg-indigo-100 text-indigo-900 border-indigo-300 dark:bg-indigo-950 dark:border-indigo-400/40 dark:text-indigo-200",
+      "bg-emerald-100 text-emerald-900 border-emerald-300 dark:bg-emerald-950 dark:border-emerald-400/40 dark:text-emerald-200",
+      "bg-purple-100 text-purple-900 border-purple-300 dark:bg-purple-950 dark:border-purple-400/40 dark:text-purple-200",
+      "bg-amber-100 text-amber-900 border-amber-300 dark:bg-amber-950 dark:border-amber-400/40 dark:text-amber-200",
+      "bg-cyan-100 text-cyan-900 border-cyan-300 dark:bg-cyan-950 dark:border-cyan-400/40 dark:text-cyan-200",
+      "bg-rose-100 text-rose-900 border-rose-300 dark:bg-rose-950 dark:border-rose-400/40 dark:text-rose-200",
     ];
 
     return (
@@ -1823,7 +1891,7 @@ export default function App() {
                               <div className="h-[42px] min-h-[42px] max-h-[42px] flex items-start justify-between gap-2 overflow-hidden">
                                 <h4
                                   onClick={() => handleOpenEdit(task)}
-                                  className="text-xs sm:text-sm font-bold text-white hover:text-indigo-300 transition-colors leading-snug cursor-pointer line-clamp-2"
+                                  className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white hover:text-indigo-600 dark:hover:text-indigo-300 transition-colors leading-snug cursor-pointer line-clamp-2"
                                   title={task.title}>
                                   {task.title}
                                 </h4>
@@ -1836,24 +1904,24 @@ export default function App() {
                               {/* 2. Body (Fixed 36px height): Description */}
                               <div className="h-[36px] min-h-[36px] max-h-[36px] overflow-hidden">
                                 {task.description ? (
-                                  <p className="text-xs text-slate-300/80 line-clamp-2 leading-relaxed">
+                                  <p className="text-xs text-slate-700 dark:text-slate-300 line-clamp-2 leading-relaxed font-medium">
                                     {task.description}
                                   </p>
                                 ) : (
-                                  <span className="text-[11px] text-slate-500 italic block">
+                                  <span className="text-[11px] text-slate-500 dark:text-slate-400 italic block">
                                     Sin descripción adicional
                                   </span>
                                 )}
                               </div>
 
                               {/* 3. Metadata Tags (Fixed 26px height): Project & Dates */}
-                              <div className="h-[26px] min-h-[26px] max-h-[26px] flex items-center gap-1.5 text-[10px] pt-1.5 border-t border-[#222a3d]/60 overflow-hidden truncate">
-                                <span className="px-1.5 py-0.5 rounded bg-[#060e20] text-indigo-300 border border-[#222a3d] font-semibold truncate max-w-[105px]">
+                              <div className="h-[26px] min-h-[26px] max-h-[26px] flex items-center gap-1.5 text-[10px] pt-1.5 border-t border-slate-200 dark:border-[#222a3d]/60 overflow-hidden truncate">
+                                <span className="px-1.5 py-0.5 rounded bg-slate-100 text-indigo-800 border border-slate-300 dark:bg-[#060e20] dark:text-indigo-300 dark:border-[#222a3d] font-bold truncate max-w-[105px]">
                                   📁 {task.project}
                                 </span>
 
                                 {task.due_date && (
-                                  <span className="text-amber-300/90 flex items-center gap-0.5 shrink-0">
+                                  <span className="text-amber-800 dark:text-amber-300 font-semibold flex items-center gap-0.5 shrink-0">
                                     <span className="material-symbols-outlined text-[12px]">
                                       schedule
                                     </span>
@@ -1862,20 +1930,20 @@ export default function App() {
                                 )}
 
                                 {task.completed_at && (
-                                  <span className="text-emerald-400 font-semibold truncate shrink-0">
+                                  <span className="text-emerald-800 dark:text-emerald-400 font-bold truncate shrink-0">
                                     ✓ {task.completed_at}
                                   </span>
                                 )}
                               </div>
 
                               {/* 4. Footer (Fixed 26px height): Multi-Assignees & Action Shortcuts */}
-                              <div className="h-[26px] min-h-[26px] max-h-[26px] flex items-center justify-between text-xs text-slate-400 pt-1">
+                              <div className="h-[26px] min-h-[26px] max-h-[26px] flex items-center justify-between text-xs text-slate-600 dark:text-slate-400 pt-1">
                                 {renderAssigneeAvatars(task, 2, true)}
 
                                 <div className="flex items-center gap-1 shrink-0">
                                   <button
                                     onClick={() => handleOpenEdit(task)}
-                                    className="p-1 text-slate-400 hover:text-white transition-colors"
+                                    className="p-1 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-colors"
                                     title="Editar tarea">
                                     <span className="material-symbols-outlined text-[16px]">
                                       edit
@@ -1883,7 +1951,7 @@ export default function App() {
                                   </button>
                                   <button
                                     onClick={() => openDeleteTaskModal(task)}
-                                    className="p-1 text-slate-400 hover:text-rose-400 transition-colors"
+                                    className="p-1 text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 transition-colors"
                                     title="Eliminar tarea">
                                     <span className="material-symbols-outlined text-[16px]">
                                       delete
@@ -1918,16 +1986,16 @@ export default function App() {
 
                   {/* Status Color Indicators Legend */}
                   <div className="flex items-center gap-3 text-[11px] font-bold pl-2 border-l border-[#2d3449]">
-                    <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-[#231a0b] text-amber-300 border border-amber-500/40">
-                      <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.8)]"></span>
+                    <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-amber-50 text-amber-900 border border-amber-300 dark:bg-[#231a0b] dark:text-amber-300 dark:border-amber-500/40">
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shadow-[0_0_6px_rgba(245,158,11,0.8)] dark:bg-amber-400 dark:shadow-[0_0_6px_rgba(251,191,36,0.8)]"></span>
                       <span>Pendiente</span>
                     </span>
-                    <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-[#0a233a] text-cyan-300 border border-cyan-500/40">
-                      <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 shadow-[0_0_6px_rgba(34,211,238,0.8)]"></span>
+                    <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-cyan-50 text-cyan-900 border border-cyan-300 dark:bg-[#0a233a] dark:text-cyan-300 dark:border-cyan-500/40">
+                      <span className="w-2.5 h-2.5 rounded-full bg-cyan-600 shadow-[0_0_6px_rgba(8,145,178,0.8)] dark:bg-cyan-400 dark:shadow-[0_0_6px_rgba(34,211,238,0.8)]"></span>
                       <span>En Progreso</span>
                     </span>
-                    <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-[#09281a] text-emerald-300 border border-emerald-500/40">
-                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]"></span>
+                    <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-300 dark:bg-[#09281a] dark:text-emerald-300 dark:border-emerald-500/40">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 shadow-[0_0_6px_rgba(5,150,105,0.8)] dark:bg-emerald-400 dark:shadow-[0_0_6px_rgba(52,211,153,0.8)]"></span>
                       <span>Completada</span>
                     </span>
                   </div>
@@ -1985,29 +2053,20 @@ export default function App() {
                             </span>
                           </div>
 
-                          {/* Metadata: Project & Dates */}
+                          {/* Metadata: Project & Start Date */}
                           <div className="flex flex-wrap items-center gap-2 text-[11px] pt-1 border-t border-black/20">
                             <span
                               className={`px-2 py-0.5 rounded font-bold text-[10px] border ${statusStyle.projectBadge}`}>
                               📁 {task.project || "General"}
                             </span>
 
-                            {task.due_date && (
+                            {task.start_date && (
                               <span
                                 className={`flex items-center gap-0.5 text-[10px] font-semibold ${statusStyle.dateColor}`}>
                                 <span className="material-symbols-outlined text-[12px]">
-                                  schedule
+                                  calendar_today
                                 </span>
-                                {task.due_date}
-                              </span>
-                            )}
-
-                            {task.completed_at && (
-                              <span className="text-emerald-400 font-bold text-[10px] flex items-center gap-0.5">
-                                <span className="material-symbols-outlined text-[12px]">
-                                  check_circle
-                                </span>
-                                {task.completed_at}
+                                <span>Inicio: {task.start_date}</span>
                               </span>
                             )}
                           </div>
@@ -2064,8 +2123,6 @@ export default function App() {
                           <th className="py-3.5 px-4">Responsables</th>
                           <th className="py-3.5 px-4">Prioridad</th>
                           <th className="py-3.5 px-4">Fecha Inicio</th>
-                          <th className="py-3.5 px-4">Fecha Límite</th>
-                          <th className="py-3.5 px-4">Fecha Completada</th>
                           <th className="py-3.5 px-4 text-right">Acciones</th>
                         </tr>
                       </thead>
@@ -2119,37 +2176,6 @@ export default function App() {
                               <td
                                 className={`py-3.5 px-4 text-xs font-semibold ${statusStyle.dateColor}`}>
                                 {task.start_date || "—"}
-                              </td>
-
-                              {/* Due Date */}
-                              <td
-                                className={`py-3.5 px-4 text-xs font-semibold ${statusStyle.dateColor}`}>
-                                {task.due_date ? (
-                                  <span className="flex items-center gap-1">
-                                    <span className="material-symbols-outlined text-[13px] opacity-70">
-                                      event
-                                    </span>
-                                    {task.due_date}
-                                  </span>
-                                ) : (
-                                  "—"
-                                )}
-                              </td>
-
-                              {/* Completed At Date */}
-                              <td className="py-3.5 px-4 text-xs font-bold">
-                                {task.completed_at ? (
-                                  <span className="text-emerald-400 flex items-center gap-1">
-                                    <span className="material-symbols-outlined text-[15px]">
-                                      check_circle
-                                    </span>
-                                    {task.completed_at}
-                                  </span>
-                                ) : (
-                                  <span className="text-slate-500 font-normal">
-                                    —
-                                  </span>
-                                )}
                               </td>
 
                               {/* Action Buttons & Quick Status Switcher */}

@@ -1,7 +1,9 @@
 const isDev =
   typeof window !== "undefined" &&
   (window.location.port === "5173" || window.location.port === "3000");
-const API_BASE_URL = isDev ? "http://10.100.1.203:8000/api" : "/api";
+const API_BASE_URL = isDev
+  ? `http://${window.location.hostname}:8000/api`
+  : "/api";
 
 export const AuthAPI = {
   // Iniciar sesión
