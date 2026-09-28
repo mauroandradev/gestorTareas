@@ -32,19 +32,13 @@ class ProjectService:
             members_list = [m.strip() for m in (proj.members or "").split(",") if m.strip()]
             owner = proj.owner_name or "Administrador Principal"
 
-            # Check accessibility
-            if not is_admin and user_clean:
+            # Check accessibility: strictly owner or assigned members for non-admins
+            if not is_admin:
+                if not user_clean:
+                    continue
                 is_owner = (owner.lower() == user_clean.lower())
                 is_member = any(m.lower() == user_clean.lower() for m in members_list)
-                has_task = (
-                    db.query(Task)
-                    .filter(
-                        Task.project == proj.name,
-                        Task.assignee.ilike(f"%{user_clean}%")
-                    )
-                    .count() > 0
-                )
-                if not (is_owner or is_member or has_task):
+                if not (is_owner or is_member):
                     continue
 
             results.append(
