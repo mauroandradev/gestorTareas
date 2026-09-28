@@ -3,10 +3,34 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from ..models.project import Project
 from ..models.task import Task
+from ..models.user import User
 from ..schemas.project import ProjectCreate, ProjectUpdate, ProjectResponse
 
 
 class ProjectService:
+    @staticmethod
+    def _check_permission(
+        db: Session,
+        project: Optional[Project],
+        current_user: Optional[str],
+        is_admin: bool,
+        action_desc: str = "modificar este proyecto"
+    ) -> None:
+        """Verify that current_user has project management permissions (Admin or non-Miembro Owner)."""
+        if is_admin:
+            return
+
+        if not current_user:
+            raise PermissionError(f"Se requiere autenticación para {action_desc}.")
+
+        clean_user = current_user.strip()
+        user = db.query(User).filter(User.name == clean_user).first()
+        if user and (user.role or "").strip().lower() == "miembro":
+            raise PermissionError(f"Los usuarios con el rol 'Miembro' no tienen permisos para {action_desc}.")
+
+        if project and project.owner_name:
+            if project.owner_name.strip().lower() != clean_user.lower():
+                raise PermissionError(f"Solo el dueño del proyecto o un Administrador pueden {action_desc}.")
     @staticmethod
     def get_projects(db: Session, user_name: Optional[str] = None, is_admin: bool = False) -> List[ProjectResponse]:
         """
@@ -123,10 +147,8 @@ class ProjectService:
             db.commit()
             db.refresh(project)
 
-        # Check permissions: owner or admin
-        if not is_admin and current_user:
-            if project.owner_name and project.owner_name.lower() != current_user.lower():
-                raise PermissionError("Solo el dueño del proyecto o un Administrador pueden modificar este proyecto.")
+        # Check permissions: admin or non-Miembro owner
+        ProjectService._check_permission(db, project, current_user, is_admin, "modificar este proyecto")
 
         new_name = (update_in.name or update_in.new_name or "").strip()
         if new_name and new_name != old_clean:
@@ -173,7 +195,7 @@ class ProjectService:
         current_user: Optional[str] = None,
         is_admin: bool = False
     ) -> ProjectResponse:
-        """Add a member to a project. Permitted for Project Owner and Admins."""
+        """Add a member to a project. Permitted for Project Owner (non-Miembro) and Admins."""
         clean_proj = project_name.strip()
         clean_member = member_name.strip()
         project = db.query(Project).filter(Project.name == clean_proj).first()
@@ -183,9 +205,7 @@ class ProjectService:
             db.commit()
             db.refresh(project)
 
-        if not is_admin and current_user:
-            if project.owner_name and project.owner_name.lower() != current_user.lower():
-                raise PermissionError("Solo el dueño del proyecto o un Administrador pueden agregar miembros.")
+        ProjectService._check_permission(db, project, current_user, is_admin, "agregar miembros al proyecto")
 
         members = [m.strip() for m in (project.members or "").split(",") if m.strip()]
         if clean_member not in members:
@@ -213,16 +233,14 @@ class ProjectService:
         current_user: Optional[str] = None,
         is_admin: bool = False
     ) -> ProjectResponse:
-        """Remove a member from a project. Permitted for Project Owner and Admins."""
+        """Remove a member from a project. Permitted for Project Owner (non-Miembro) and Admins."""
         clean_proj = project_name.strip()
         clean_member = member_name.strip()
         project = db.query(Project).filter(Project.name == clean_proj).first()
         if not project:
             raise ValueError(f"Proyecto '{clean_proj}' no encontrado")
 
-        if not is_admin and current_user:
-            if project.owner_name and project.owner_name.lower() != current_user.lower():
-                raise PermissionError("Solo el dueño del proyecto o un Administrador pueden remover miembros.")
+        ProjectService._check_permission(db, project, current_user, is_admin, "remover miembros del proyecto")
 
         members = [m.strip() for m in (project.members or "").split(",") if m.strip()]
         if clean_member in members:
@@ -253,9 +271,7 @@ class ProjectService:
         clean_proj = project_name.strip()
         project = db.query(Project).filter(Project.name == clean_proj).first()
 
-        if project and not is_admin and current_user:
-            if project.owner_name and project.owner_name.lower() != current_user.lower():
-                raise PermissionError("Solo el dueño del proyecto o un Administrador pueden eliminar este proyecto.")
+        ProjectService._check_permission(db, project, current_user, is_admin, "eliminar este proyecto")
 
         deleted_tasks = db.query(Task).filter(Task.project == clean_proj).delete(synchronize_session="fetch")
         if project:

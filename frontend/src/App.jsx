@@ -159,6 +159,8 @@ export default function App() {
   const isAdmin = Boolean(
     currentUser?.is_admin || currentUser?.role === "Administrador",
   );
+  const isMemberRole =
+    (currentUser?.role || "").toLowerCase() === "miembro" && !isAdmin;
 
   // Derive project names list from project objects
   const projectList = projects.map((p) => p.name);
@@ -455,6 +457,13 @@ export default function App() {
   };
 
   const handleOpenEditProject = (proj) => {
+    if (isMemberRole) {
+      showToast(
+        "Los usuarios con rol 'Miembro' no tienen permisos para modificar proyectos",
+        "error",
+      );
+      return;
+    }
     const projObj =
       typeof proj === "object"
         ? proj
@@ -477,6 +486,13 @@ export default function App() {
   const handleSaveEditProject = async (e) => {
     e.preventDefault();
     if (!editingProject) return;
+    if (isMemberRole) {
+      showToast(
+        "Los usuarios con rol 'Miembro' no tienen permisos para modificar proyectos",
+        "error",
+      );
+      return;
+    }
     const oldName = editingProject.name;
     const newName = editProjectForm.name.trim();
     if (!newName) {
@@ -585,6 +601,13 @@ export default function App() {
   };
 
   const openDeleteProjectModal = (projectName, taskCount = 0) => {
+    if (isMemberRole) {
+      showToast(
+        "Los usuarios con rol 'Miembro' no tienen permisos para eliminar proyectos",
+        "error",
+      );
+      return;
+    }
     setDeleteModal({
       isOpen: true,
       type: "project",
@@ -1527,7 +1550,7 @@ export default function App() {
                     stats.project_counts?.[proj.name] ??
                     (proj.task_count ?? 0);
                   const isOwner = proj.owner_name === currentUser?.name;
-                  const canManage = isAdmin || isOwner;
+                  const canManage = !isMemberRole && (isAdmin || isOwner);
 
                   return (
                     <div
