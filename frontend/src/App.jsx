@@ -457,13 +457,6 @@ export default function App() {
   };
 
   const handleOpenEditProject = (proj) => {
-    if (isMemberRole) {
-      showToast(
-        "Los usuarios con rol 'Miembro' no tienen permisos para modificar proyectos",
-        "error",
-      );
-      return;
-    }
     const projObj =
       typeof proj === "object"
         ? proj
@@ -473,6 +466,19 @@ export default function App() {
             owner_name: currentUser?.name,
             members: [],
           };
+
+    const isOwner =
+      (projObj.owner_name || "").toLowerCase() ===
+      (currentUser?.name || "").toLowerCase();
+
+    if (!isAdmin && !isOwner) {
+      showToast(
+        "Solo el dueño del proyecto o un Administrador pueden modificar este proyecto",
+        "error",
+      );
+      return;
+    }
+
     setEditingProject(projObj);
     setEditProjectForm({
       name: projObj.name,
@@ -486,13 +492,19 @@ export default function App() {
   const handleSaveEditProject = async (e) => {
     e.preventDefault();
     if (!editingProject) return;
-    if (isMemberRole) {
+
+    const isOwner =
+      (editingProject.owner_name || "").toLowerCase() ===
+      (currentUser?.name || "").toLowerCase();
+
+    if (!isAdmin && !isOwner) {
       showToast(
-        "Los usuarios con rol 'Miembro' no tienen permisos para modificar proyectos",
+        "Solo el dueño del proyecto o un Administrador pueden modificar este proyecto",
         "error",
       );
       return;
     }
+
     const oldName = editingProject.name;
     const newName = editProjectForm.name.trim();
     if (!newName) {
@@ -601,9 +613,14 @@ export default function App() {
   };
 
   const openDeleteProjectModal = (projectName, taskCount = 0) => {
-    if (isMemberRole) {
+    const projObj = projects.find((p) => p.name === projectName);
+    const isOwner =
+      (projObj?.owner_name || "").toLowerCase() ===
+      (currentUser?.name || "").toLowerCase();
+
+    if (!isAdmin && !isOwner) {
       showToast(
-        "Los usuarios con rol 'Miembro' no tienen permisos para eliminar proyectos",
+        "Solo el dueño del proyecto o un Administrador pueden eliminar este proyecto",
         "error",
       );
       return;
@@ -1549,8 +1566,10 @@ export default function App() {
                   const projCount =
                     stats.project_counts?.[proj.name] ??
                     (proj.task_count ?? 0);
-                  const isOwner = proj.owner_name === currentUser?.name;
-                  const canManage = !isMemberRole && (isAdmin || isOwner);
+                  const isOwner =
+                    (proj.owner_name || "").toLowerCase() ===
+                    (currentUser?.name || "").toLowerCase();
+                  const canManage = isAdmin || isOwner;
 
                   return (
                     <div

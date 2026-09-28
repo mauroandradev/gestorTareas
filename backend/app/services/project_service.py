@@ -16,7 +16,7 @@ class ProjectService:
         is_admin: bool,
         action_desc: str = "modificar este proyecto"
     ) -> None:
-        """Verify that current_user has project management permissions (Admin or non-Miembro Owner)."""
+        """Verify that current_user has project management permissions (Admin or Project Owner)."""
         if is_admin:
             return
 
@@ -24,13 +24,10 @@ class ProjectService:
             raise PermissionError(f"Se requiere autenticación para {action_desc}.")
 
         clean_user = current_user.strip()
-        user = db.query(User).filter(User.name == clean_user).first()
-        if user and (user.role or "").strip().lower() == "miembro":
-            raise PermissionError(f"Los usuarios con el rol 'Miembro' no tienen permisos para {action_desc}.")
-
         if project and project.owner_name:
             if project.owner_name.strip().lower() != clean_user.lower():
                 raise PermissionError(f"Solo el dueño del proyecto o un Administrador pueden {action_desc}.")
+
     @staticmethod
     def get_projects(db: Session, user_name: Optional[str] = None, is_admin: bool = False) -> List[ProjectResponse]:
         """
@@ -86,7 +83,7 @@ class ProjectService:
 
     @staticmethod
     def create_project(db: Session, project_in: ProjectCreate, creator_name: Optional[str] = None) -> ProjectResponse:
-        """Create a new project with owner and initial members."""
+        """Create a new project with owner and initial members. Any user can create their own project."""
         clean_name = project_in.name.strip()
         existing = db.query(Project).filter(Project.name == clean_name).first()
         if existing:
