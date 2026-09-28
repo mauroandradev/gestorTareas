@@ -54,16 +54,22 @@ def get_task(task_id: int, db: Session = Depends(get_db)):
 )
 def create_task(task_in: TaskCreate, db: Session = Depends(get_db)):
     """Crear una nueva tarea vinculada a un proyecto."""
-    return TaskService.create_task(db, task_in)
+    try:
+        return TaskService.create_task(db, task_in)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.put("/{task_id}", response_model=TaskResponse, summary="Actualizar tarea")
 def update_task(task_id: int, task_in: TaskUpdate, db: Session = Depends(get_db)):
     """Actualizar datos de una tarea."""
-    task = TaskService.update_task(db, task_id, task_in)
-    if not task:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tarea no encontrada")
-    return task
+    try:
+        task = TaskService.update_task(db, task_id, task_in)
+        if not task:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tarea no encontrada")
+        return task
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.patch("/{task_id}/status", response_model=TaskResponse, summary="Cambio rápido de estado")

@@ -116,7 +116,12 @@ export const TaskAPI = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(taskData),
     });
-    if (!res.ok) throw new Error("Error al crear tarea");
+    if (!res.ok) {
+      const err = await res
+        .json()
+        .catch(() => ({ detail: "Error al crear tarea" }));
+      throw new Error(err.detail || "Error al crear tarea");
+    }
     return res.json();
   },
 
@@ -127,7 +132,12 @@ export const TaskAPI = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(taskData),
     });
-    if (!res.ok) throw new Error("Error al actualizar tarea");
+    if (!res.ok) {
+      const err = await res
+        .json()
+        .catch(() => ({ detail: "Error al actualizar tarea" }));
+      throw new Error(err.detail || "Error al actualizar tarea");
+    }
     return res.json();
   },
 

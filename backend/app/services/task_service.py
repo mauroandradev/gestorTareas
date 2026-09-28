@@ -94,6 +94,30 @@ class TaskService:
         return db.query(Task).filter(Task.id == task_id).first()
 
     @staticmethod
+    def _validate_project_assignees(db: Session, project_name: Optional[str], assignees_list: List[str]) -> None:
+        """Validate that all assignees belong to the project (owner or members)."""
+        if not project_name or not assignees_list:
+            return
+
+        proj_clean = project_name.strip()
+        if proj_clean.lower() in ["general", "todos"]:
+            return
+
+        project = db.query(Project).filter(Project.name == proj_clean).first()
+        if not project:
+            return
+
+        owner = (project.owner_name or "Administrador Principal").strip().lower()
+        members = [m.strip().lower() for m in (project.members or "").split(",") if m.strip()]
+        allowed = {owner, *members}
+
+        invalid_assignees = [a for a in assignees_list if a and a.strip().lower() not in allowed and a.strip() != "Sin asignar"]
+        if invalid_assignees:
+            raise ValueError(
+                f"No se puede asignar la tarea: los usuarios '{', '.join(invalid_assignees)}' no forman parte del proyecto '{project.name}'."
+            )
+
+    @staticmethod
     def create_task(db: Session, task_in: TaskCreate) -> Task:
         """Create a new task with formatted dates and multiple assignees support."""
         today_str = datetime.now().strftime("%Y-%m-%d")
@@ -102,8 +126,13 @@ class TaskService:
 
         if task_in.assignees and len(task_in.assignees) > 0:
             assignee_val = ", ".join([a.strip() for a in task_in.assignees if a.strip()])
+            assignees_check = [a.strip() for a in task_in.assignees if a.strip()]
         else:
             assignee_val = task_in.assignee or "Sin asignar"
+            assignees_check = [a.strip() for a in (task_in.assignee or "").split(",") if a.strip()]
+
+        # Validate that assignees belong to project
+        TaskService._validate_project_assignees(db, task_in.project, assignees_check)
 
         task = Task(
             title=task_in.title.strip(),
@@ -135,6 +164,14 @@ class TaskService:
         if "assignees" in update_data and update_data["assignees"] is not None:
             assignees_list = update_data.pop("assignees")
             update_data["assignee"] = ", ".join([a.strip() for a in assignees_list if a.strip()]) if assignees_list else "Sin asignar"
+            assignees_check = [a.strip() for a in assignees_list if a.strip()]
+        elif "assignee" in update_data and update_data["assignee"] is not None:
+            assignees_check = [a.strip() for a in update_data["assignee"].split(",") if a.strip()]
+        else:
+            assignees_check = [a.strip() for a in (task.assignee or "").split(",") if a.strip()]
+
+        target_project = update_data.get("project", task.project)
+        TaskService._validate_project_assignees(db, target_project, assignees_check)
 
         # Handle completion date on status change
         if "status" in update_data:

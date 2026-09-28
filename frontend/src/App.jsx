@@ -660,17 +660,33 @@ export default function App() {
   const handleOpenCreate = (prefilledDate = null) => {
     setEditingTask(null);
     const today = new Date().toISOString().split("T")[0];
-    const defaultAssigneeList =
-      users.length > 0
-        ? [users[0].name]
-        : currentUser?.name
-          ? [currentUser.name]
-          : ["Administrador Principal"];
 
     const selectedProj =
       currentProject !== "Todos" && projectList.includes(currentProject)
         ? currentProject
         : projectList[0] || (isAdmin ? "Q3 Lanzamiento" : "General");
+
+    const projObj = projects.find((p) => p.name === selectedProj);
+    const projAllowedMembers = projObj
+      ? Array.from(
+          new Set(
+            [projObj.owner_name, ...(projObj.members || [])].filter(Boolean),
+          ),
+        )
+      : [];
+
+    let defaultAssigneeList = [];
+    if (projAllowedMembers.length > 0) {
+      if (currentUser?.name && projAllowedMembers.includes(currentUser.name)) {
+        defaultAssigneeList = [currentUser.name];
+      } else {
+        defaultAssigneeList = [projAllowedMembers[0]];
+      }
+    } else if (users.length > 0) {
+      defaultAssigneeList = [users[0].name];
+    } else {
+      defaultAssigneeList = [currentUser?.name || "Administrador Principal"];
+    }
 
     setFormData({
       title: "",
@@ -697,7 +713,20 @@ export default function App() {
         .map((s) => s.trim())
         .filter(Boolean);
     }
-    if (parsedAssignees.length === 0 && users.length > 0) {
+
+    const taskProj = task.project || "General";
+    const projObj = projects.find((p) => p.name === taskProj);
+    const projAllowedMembers = projObj
+      ? Array.from(
+          new Set(
+            [projObj.owner_name, ...(projObj.members || [])].filter(Boolean),
+          ),
+        )
+      : [];
+
+    if (parsedAssignees.length === 0 && projAllowedMembers.length > 0) {
+      parsedAssignees = [projAllowedMembers[0]];
+    } else if (parsedAssignees.length === 0 && users.length > 0) {
       parsedAssignees = [users[0].name];
     }
 
@@ -706,7 +735,7 @@ export default function App() {
       description: task.description || "",
       priority: task.priority || "Media",
       status: task.status || "Pendiente",
-      project: task.project || "General",
+      project: taskProj,
       assignees: parsedAssignees,
       assignee: parsedAssignees.join(", "),
       start_date: task.start_date || "",
@@ -2485,9 +2514,34 @@ export default function App() {
                 <label className="font-bold text-slate-300">Proyecto</label>
                 <select
                   value={formData.project}
-                  onChange={(e) =>
-                    setFormData({ ...formData, project: e.target.value })
-                  }
+                  onChange={(e) => {
+                    const newProjName = e.target.value;
+                    const targetProjObj = projects.find((p) => p.name === newProjName);
+                    const targetMembers = targetProjObj
+                      ? Array.from(
+                          new Set(
+                            [targetProjObj.owner_name, ...(targetProjObj.members || [])].filter(Boolean),
+                          ),
+                        )
+                      : [];
+
+                    // Filter current assignees to only those who belong to the newly selected project
+                    let updatedAssignees = (formData.assignees || []).filter((name) =>
+                      targetMembers.includes(name),
+                    );
+                    if (updatedAssignees.length === 0 && targetMembers.length > 0) {
+                      updatedAssignees = targetMembers.includes(currentUser?.name)
+                        ? [currentUser.name]
+                        : [targetMembers[0]];
+                    }
+
+                    setFormData({
+                      ...formData,
+                      project: newProjName,
+                      assignees: updatedAssignees,
+                      assignee: updatedAssignees.join(", "),
+                    });
+                  }}
                   className="bg-[#060e20] text-white p-2.5 rounded-xl border border-[#2d3449] focus:outline-none focus:border-indigo-500 cursor-pointer">
                   {projectList.length > 0 ? (
                     projectList.map((p) => (
@@ -2503,124 +2557,160 @@ export default function App() {
                 </select>
               </div>
 
-              {/* Multiple Assignees Selection */}
-              <div className="flex flex-col gap-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="font-bold text-slate-300 flex items-center gap-1.5">
-                    <span>Responsables Asignados</span>
-                    <span className="text-[11px] font-normal text-indigo-400">
-                      ({formData.assignees?.length || 0} seleccionados)
-                    </span>
-                  </label>
-                  <div className="flex items-center gap-2 text-[11px]">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const allNames = users.length > 0 ? users.map((u) => u.name) : ["Administrador Principal"];
-                        setFormData({
-                          ...formData,
-                          assignees: allNames,
-                          assignee: allNames.join(", "),
-                        });
-                      }}
-                      className="text-indigo-400 hover:text-indigo-300 font-semibold hover:underline">
-                      Todos
-                    </button>
-                    <span className="text-slate-600">•</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFormData({
-                          ...formData,
-                          assignees: [],
-                          assignee: "",
-                        });
-                      }}
-                      className="text-slate-400 hover:text-slate-300 hover:underline">
-                      Desmarcar
-                    </button>
-                  </div>
-                </div>
+              {/* Multiple Assignees Selection (Strictly filtered by selected project members) */}
+              {(() => {
+                const currentTaskProjObj = projects.find((p) => p.name === formData.project);
+                const allowedProjectMembers = currentTaskProjObj
+                  ? Array.from(
+                      new Set(
+                        [currentTaskProjObj.owner_name, ...(currentTaskProjObj.members || [])].filter(Boolean),
+                      ),
+                    )
+                  : [];
 
-                {/* Selected Assignee Chips */}
-                {formData.assignees && formData.assignees.length > 0 ? (
-                  <div className="flex flex-wrap gap-1.5 p-2 bg-[#060e20] border border-[#2d3449] rounded-xl max-h-[72px] overflow-y-auto">
-                    {formData.assignees.map((name) => (
-                      <span
-                        key={name}
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-indigo-950 border border-indigo-500/40 text-indigo-200 text-xs font-semibold animate-in fade-in">
-                        <span>{name}</span>
+                // Match members with user records
+                const assignableUsers = users.filter((u) =>
+                  allowedProjectMembers.length > 0 ? allowedProjectMembers.includes(u.name) : true,
+                );
+
+                const existingUserNames = new Set(assignableUsers.map((u) => u.name));
+                const fullAssignableUsers = [
+                  ...assignableUsers,
+                  ...allowedProjectMembers
+                    .filter((name) => !existingUserNames.has(name))
+                    .map((name) => ({
+                      id: `synth-${name}`,
+                      name,
+                      role: name === currentTaskProjObj?.owner_name ? "Dueño" : "Miembro",
+                    })),
+                ];
+
+                return (
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="font-bold text-slate-300 flex items-center gap-1.5">
+                        <span>Responsables Asignados</span>
+                        <span className="text-[11px] font-normal text-indigo-400">
+                          ({formData.assignees?.length || 0} de {fullAssignableUsers.length} miembros)
+                        </span>
+                      </label>
+                      <div className="flex items-center gap-2 text-[11px]">
                         <button
                           type="button"
                           onClick={() => {
-                            const updated = formData.assignees.filter((n) => n !== name);
+                            const allNames = fullAssignableUsers.map((u) => u.name);
                             setFormData({
                               ...formData,
-                              assignees: updated,
-                              assignee: updated.join(", "),
+                              assignees: allNames,
+                              assignee: allNames.join(", "),
                             });
                           }}
-                          className="hover:text-rose-400 transition-colors ml-0.5 font-bold"
-                          title={`Quitar a ${name}`}>
-                          ×
+                          className="text-indigo-400 hover:text-indigo-300 font-semibold hover:underline">
+                          Todos
                         </button>
-                      </span>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="p-2 bg-[#060e20] border border-amber-500/30 rounded-xl text-amber-300/80 text-[11px] italic">
-                    ⚠️ Selecciona al menos un responsable del equipo abajo.
-                  </div>
-                )}
+                        <span className="text-slate-600">•</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFormData({
+                              ...formData,
+                              assignees: [],
+                              assignee: "",
+                            });
+                          }}
+                          className="text-slate-400 hover:text-slate-300 hover:underline">
+                          Desmarcar
+                        </button>
+                      </div>
+                    </div>
 
-                {/* Member Checklist */}
-                <div className="max-h-[140px] overflow-y-auto border border-[#222a3d] rounded-xl bg-[#060e20] p-1.5 flex flex-col gap-1">
-                  {users.length > 0 ? (
-                    users.map((u) => {
-                      const isChecked = formData.assignees?.includes(u.name);
-                      return (
-                        <label
-                          key={u.id}
-                          className={`flex items-center justify-between p-1.5 rounded-lg cursor-pointer transition-colors text-xs ${
-                            isChecked
-                              ? "bg-indigo-950/60 border border-indigo-500/30 text-white font-medium"
-                              : "hover:bg-[#131b2e] text-slate-300 border border-transparent"
-                          }`}>
-                          <div className="flex items-center gap-2 truncate">
-                            <input
-                              type="checkbox"
-                              checked={isChecked || false}
-                              onChange={() => {
-                                const current = formData.assignees || [];
-                                const updated = isChecked
-                                  ? current.filter((n) => n !== u.name)
-                                  : [...current, u.name];
+                    {/* Selected Assignee Chips */}
+                    {formData.assignees && formData.assignees.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5 p-2 bg-[#060e20] border border-[#2d3449] rounded-xl max-h-[72px] overflow-y-auto">
+                        {formData.assignees.map((name) => (
+                          <span
+                            key={name}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-indigo-950 border border-indigo-500/40 text-indigo-200 text-xs font-semibold animate-in fade-in">
+                            <span>{name}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updated = formData.assignees.filter((n) => n !== name);
                                 setFormData({
                                   ...formData,
                                   assignees: updated,
                                   assignee: updated.join(", "),
                                 });
                               }}
-                              className="rounded border-[#2d3449] bg-[#0b1326] text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer"
-                            />
-                            <div className="w-5 h-5 rounded-full bg-indigo-900 border border-indigo-400/40 flex items-center justify-center text-[10px] font-bold text-indigo-200 shrink-0">
-                              {u.name.charAt(0)}
-                            </div>
-                            <span className="truncate">{u.name}</span>
-                          </div>
-                          <span className="text-[10px] text-slate-400 bg-[#131b2e] px-1.5 py-0.5 rounded font-medium shrink-0 ml-2">
-                            {u.role}
+                              className="hover:text-rose-400 transition-colors ml-0.5 font-bold"
+                              title={`Quitar a ${name}`}>
+                              ×
+                            </button>
                           </span>
-                        </label>
-                      );
-                    })
-                  ) : (
-                    <div className="text-slate-500 text-center py-2 italic text-[11px]">
-                      No hay usuarios registrados
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="p-2 bg-[#060e20] border border-amber-500/30 rounded-xl text-amber-300/80 text-[11px] italic">
+                        ⚠️ Selecciona al menos un responsable del proyecto abajo.
+                      </div>
+                    )}
+
+                    {/* Member Checklist */}
+                    <div className="max-h-[140px] overflow-y-auto border border-[#222a3d] rounded-xl bg-[#060e20] p-1.5 flex flex-col gap-1">
+                      {fullAssignableUsers.length > 0 ? (
+                        fullAssignableUsers.map((u) => {
+                          const isOwner = u.name === currentTaskProjObj?.owner_name;
+                          const isChecked = formData.assignees?.includes(u.name);
+                          return (
+                            <label
+                              key={u.id}
+                              className={`flex items-center justify-between p-1.5 rounded-lg cursor-pointer transition-colors text-xs ${
+                                isChecked
+                                  ? "bg-indigo-950/60 border border-indigo-500/30 text-white font-medium"
+                                  : "hover:bg-[#131b2e] text-slate-300 border border-transparent"
+                              }`}>
+                              <div className="flex items-center gap-2 truncate">
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked || false}
+                                  onChange={() => {
+                                    const current = formData.assignees || [];
+                                    const updated = isChecked
+                                      ? current.filter((n) => n !== u.name)
+                                      : [...current, u.name];
+                                    setFormData({
+                                      ...formData,
+                                      assignees: updated,
+                                      assignee: updated.join(", "),
+                                    });
+                                  }}
+                                  className="rounded border-[#2d3449] bg-[#0b1326] text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer"
+                                />
+                                <div className="w-5 h-5 rounded-full bg-indigo-900 border border-indigo-400/40 flex items-center justify-center text-[10px] font-bold text-indigo-200 shrink-0">
+                                  {u.name.charAt(0)}
+                                </div>
+                                <span className="truncate">{u.name}</span>
+                                {isOwner && (
+                                  <span className="text-[9px] text-amber-400 font-semibold bg-amber-950/60 px-1 rounded border border-amber-500/30 shrink-0">
+                                    Dueño
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-[10px] text-slate-400 bg-[#131b2e] px-1.5 py-0.5 rounded font-medium shrink-0 ml-2">
+                                {u.role}
+                              </span>
+                            </label>
+                          );
+                        })
+                      ) : (
+                        <div className="text-amber-400/90 text-center py-3 italic text-xs bg-amber-950/20 rounded-lg border border-amber-500/20 p-2">
+                          ⚠️ Este proyecto no tiene colaboradores asignados. Agrega miembros al proyecto para asignarles tareas.
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              </div>
+                  </div>
+                );
+              })()}
 
               {/* Priority & Status */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
