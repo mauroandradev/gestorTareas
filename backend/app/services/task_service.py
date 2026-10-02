@@ -11,23 +11,17 @@ from ..schemas.task import TaskCreate, TaskUpdate, TaskStatusUpdate
 class TaskService:
     @staticmethod
     def _get_user_accessible_projects(db: Session, user_name: str) -> Set[str]:
-        """Find all project names where user is owner, assigned member, or has tasks assigned."""
+        """Find all project names where user is owner or assigned member."""
         user_clean = user_name.strip()
         accessible_projects: Set[str] = set()
 
-        # 1. Check Project model
+        # 1. Check Project model (strictly owner or member)
         projects = db.query(Project).all()
         for p in projects:
             owner = p.owner_name or "Administrador Principal"
             members_list = [m.strip() for m in (p.members or "").split(",") if m.strip()]
             if owner.lower() == user_clean.lower() or any(m.lower() == user_clean.lower() for m in members_list):
                 accessible_projects.add(p.name)
-
-        # 2. Check Tasks assignees
-        task_projects = db.query(Task.project).filter(Task.assignee.ilike(f"%{user_clean}%")).distinct().all()
-        for tp in task_projects:
-            if tp[0]:
-                accessible_projects.add(tp[0])
 
         return accessible_projects
 
@@ -47,13 +41,17 @@ class TaskService:
         """Fetch tasks matching any optional filter criteria with role-based project visibility."""
         query = db.query(Task)
 
-        # Role-based project visibility: non-admins only see tasks in projects they are owner/member/assigned to
-        if not is_admin and user_name:
-            accessible_projects = TaskService._get_user_accessible_projects(db, user_name)
+        # Role-based project visibility: non-admins only see tasks in projects they belong to (owner/member), or assigned directly
+        if not is_admin:
+            if not user_name:
+                return []
+            user_clean = user_name.strip()
+            accessible_projects = TaskService._get_user_accessible_projects(db, user_clean)
+            user_assigned_filter = Task.assignee.ilike(f"%{user_clean}%")
             if accessible_projects:
-                query = query.filter(Task.project.in_(accessible_projects))
+                query = query.filter(or_(Task.project.in_(accessible_projects), user_assigned_filter))
             else:
-                query = query.filter(Task.assignee.ilike(f"%{user_name.strip()}%"))
+                query = query.filter(user_assigned_filter)
 
         if search:
             search_fmt = f"%{search.strip()}%"
@@ -96,6 +94,30 @@ class TaskService:
         return db.query(Task).filter(Task.id == task_id).first()
 
     @staticmethod
+    def _validate_project_assignees(db: Session, project_name: Optional[str], assignees_list: List[str]) -> None:
+        """Validate that all assignees belong to the project (owner or members)."""
+        if not project_name or not assignees_list:
+            return
+
+        proj_clean = project_name.strip()
+        if proj_clean.lower() in ["general", "todos"]:
+            return
+
+        project = db.query(Project).filter(Project.name == proj_clean).first()
+        if not project:
+            return
+
+        owner = (project.owner_name or "Administrador Principal").strip().lower()
+        members = [m.strip().lower() for m in (project.members or "").split(",") if m.strip()]
+        allowed = {owner, *members}
+
+        invalid_assignees = [a for a in assignees_list if a and a.strip().lower() not in allowed and a.strip() != "Sin asignar"]
+        if invalid_assignees:
+            raise ValueError(
+                f"No se puede asignar la tarea: los usuarios '{', '.join(invalid_assignees)}' no forman parte del proyecto '{project.name}'."
+            )
+
+    @staticmethod
     def create_task(db: Session, task_in: TaskCreate) -> Task:
         """Create a new task with formatted dates and multiple assignees support."""
         today_str = datetime.now().strftime("%Y-%m-%d")
@@ -104,8 +126,13 @@ class TaskService:
 
         if task_in.assignees and len(task_in.assignees) > 0:
             assignee_val = ", ".join([a.strip() for a in task_in.assignees if a.strip()])
+            assignees_check = [a.strip() for a in task_in.assignees if a.strip()]
         else:
             assignee_val = task_in.assignee or "Sin asignar"
+            assignees_check = [a.strip() for a in (task_in.assignee or "").split(",") if a.strip()]
+
+        # Validate that assignees belong to project
+        TaskService._validate_project_assignees(db, task_in.project, assignees_check)
 
         task = Task(
             title=task_in.title.strip(),
@@ -137,6 +164,14 @@ class TaskService:
         if "assignees" in update_data and update_data["assignees"] is not None:
             assignees_list = update_data.pop("assignees")
             update_data["assignee"] = ", ".join([a.strip() for a in assignees_list if a.strip()]) if assignees_list else "Sin asignar"
+            assignees_check = [a.strip() for a in assignees_list if a.strip()]
+        elif "assignee" in update_data and update_data["assignee"] is not None:
+            assignees_check = [a.strip() for a in update_data["assignee"].split(",") if a.strip()]
+        else:
+            assignees_check = [a.strip() for a in (task.assignee or "").split(",") if a.strip()]
+
+        target_project = update_data.get("project", task.project)
+        TaskService._validate_project_assignees(db, target_project, assignees_check)
 
         # Handle completion date on status change
         if "status" in update_data:
@@ -223,14 +258,14 @@ class TaskService:
             if not projects_set:
                 projects_set = {"Q3 Lanzamiento", "Soporte al Cliente", "Rediseño Web"}
         else:
-            # Non-admin: only projects where the user is owner, member, or assigned
-            accessible_projects = TaskService._get_user_accessible_projects(db, user_name)
+            user_clean = user_name.strip()
+            accessible_projects = TaskService._get_user_accessible_projects(db, user_clean)
+            user_assigned_filter = Task.assignee.ilike(f"%{user_clean}%")
             if accessible_projects:
-                tasks = db.query(Task).filter(Task.project.in_(accessible_projects)).all()
-                projects_set = accessible_projects
+                tasks = db.query(Task).filter(or_(Task.project.in_(accessible_projects), user_assigned_filter)).all()
             else:
-                tasks = db.query(Task).filter(Task.assignee.ilike(f"%{user_name.strip()}%")).all()
-                projects_set = {t.project for t in tasks if t.project}
+                tasks = db.query(Task).filter(user_assigned_filter).all()
+            projects_set = accessible_projects
 
         project_counts: Dict[str, int] = {}
         for t in tasks:

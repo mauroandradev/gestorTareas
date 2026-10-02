@@ -41,19 +41,29 @@ def seed_initial_data(db: Session) -> None:
         db.commit()
         print("[OK] Cuenta de Administrador inicial creada: admin@taskpulse.io / admin123")
 
-    # 3. Seed initial Projects if table is empty
-    if db.query(Project).count() == 0:
-        initial_projects = [
-            ("Q3 Lanzamiento", "Lanzamiento y despliegue del producto para el tercer trimestre", "Administrador Principal", "Administrador Principal"),
-            ("Rediseño Web", "Modernización completa de interfaces de usuario y experiencia visual", "Administrador Principal", "Administrador Principal"),
-            ("Soporte al Cliente", "Gestión de solicitudes, resolución de dudas y tickets técnicos", "Administrador Principal", "Administrador Principal"),
-            ("Infraestructura", "Mantenimiento de servidores, bases de datos y seguridad", "Administrador Principal", "Administrador Principal"),
-        ]
-        for name, desc, owner, members in initial_projects:
+    # 3. Seed initial Projects if table is empty or ensure existing task projects exist
+    db_projects = {p.name for p in db.query(Project).all()}
+    initial_projects = [
+        ("Q3 Lanzamiento", "Lanzamiento y despliegue del producto para el tercer trimestre", "Administrador Principal", "Administrador Principal"),
+        ("Rediseño Web", "Modernización completa de interfaces de usuario y experiencia visual", "Administrador Principal", "Administrador Principal"),
+        ("Soporte al Cliente", "Gestión de solicitudes, resolución de dudas y tickets técnicos", "Administrador Principal", "Administrador Principal"),
+        ("Infraestructura", "Mantenimiento de servidores, bases de datos y seguridad", "Administrador Principal", "Administrador Principal"),
+    ]
+    for name, desc, owner, members in initial_projects:
+        if name not in db_projects:
             proj_obj = Project(name=name, description=desc, owner_name=owner, members=members)
             db.add(proj_obj)
-        db.commit()
-        print("[OK] Proyectos iniciales cargados exitosamente.")
+            db_projects.add(name)
+
+    # Also register any project referenced by tasks if not yet in Project table
+    task_projs = {t.project for t in db.query(Task).all() if t.project}
+    for orphan_proj in (task_projs - db_projects):
+        proj_obj = Project(name=orphan_proj, description=f"Proyecto {orphan_proj}", owner_name="Administrador Principal", members="Administrador Principal")
+        db.add(proj_obj)
+        db_projects.add(orphan_proj)
+
+    db.commit()
+    print("[OK] Proyectos iniciales y existentes sincronizados exitosamente.")
 
     # 4. Seed initial tasks if table is empty
     if db.query(Task).count() == 0:
