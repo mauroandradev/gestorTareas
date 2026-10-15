@@ -4,3 +4,5 @@ sqlalchemy>=2.0.28
 pydantic>=2.6.4
 python-dateutil>=2.9.0
 python-multipart>=0.0.9
+pymysql>=1.1.0
+cryptography>=42.0.0

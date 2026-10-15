@@ -12,10 +12,16 @@ if settings.DATABASE_URL.startswith("sqlite"):
         "timeout": 30.0
     }
 
+engine_kwargs = {}
+if not settings.DATABASE_URL.startswith("sqlite"):
+    # MySQL/others: validate connections and recycle them before the server drops them
+    engine_kwargs = {"pool_pre_ping": True, "pool_recycle": 1800}
+
 engine = create_engine(
     settings.DATABASE_URL,
     connect_args=connect_args,
-    echo=False
+    echo=False,
+    **engine_kwargs
 )
 
 # Enable WAL (Write-Ahead Logging) mode and busy timeout for concurrent SQLite access
