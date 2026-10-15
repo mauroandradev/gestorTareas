@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { TaskAPI, AuthAPI, RoleAPI, ProjectAPI } from "./services/api";
 
 export default function App() {
@@ -154,6 +154,14 @@ export default function App() {
 
   // Toast State
   const [toast, setToast] = useState(null);
+
+  // Task save guard (prevents duplicate submissions on double click / Enter / slow network)
+  const [isSavingTask, setIsSavingTask] = useState(false);
+  const isSavingTaskRef = useRef(false);
+
+  // Project create guard (prevents duplicate submissions)
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const isCreatingProjectRef = useRef(false);
 
   // Check if current user has Admin privileges
   const isAdmin = Boolean(
@@ -425,6 +433,7 @@ export default function App() {
 
   const handleCreateProject = async (e) => {
     e.preventDefault();
+    if (isCreatingProjectRef.current) return;
     const cleanName = newProjectForm.name.trim();
     if (!cleanName) {
       showToast("El nombre del proyecto es obligatorio", "error");
@@ -435,6 +444,8 @@ export default function App() {
       return;
     }
 
+    isCreatingProjectRef.current = true;
+    setIsCreatingProject(true);
     try {
       const payload = {
         name: cleanName,
@@ -453,6 +464,9 @@ export default function App() {
       loadData();
     } catch (err) {
       showToast(err.message || "Error al crear proyecto", "error");
+    } finally {
+      isCreatingProjectRef.current = false;
+      setIsCreatingProject(false);
     }
   };
 
@@ -786,6 +800,7 @@ export default function App() {
 
   const handleSaveTask = async (e) => {
     e.preventDefault();
+    if (isSavingTaskRef.current) return;
     if (!formData.title.trim()) {
       showToast("El título de la tarea es obligatorio", "error");
       return;
@@ -801,6 +816,8 @@ export default function App() {
       assignee: formData.assignees.join(", "),
     };
 
+    isSavingTaskRef.current = true;
+    setIsSavingTask(true);
     try {
       if (editingTask) {
         await TaskAPI.updateTask(editingTask.id, payload);
@@ -812,7 +829,10 @@ export default function App() {
       setIsModalOpen(false);
       loadData();
     } catch (err) {
-      showToast("Error al guardar la tarea", "error");
+      showToast(err.message || "Error al guardar la tarea", "error");
+    } finally {
+      isSavingTaskRef.current = false;
+      setIsSavingTask(false);
     }
   };
 
@@ -2848,8 +2868,13 @@ export default function App() {
                 <button
                   type="submit"
                   form="taskModalForm"
-                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white font-bold text-xs shadow-md shadow-indigo-600/30 transition-all active:scale-95">
-                  {editingTask ? "Guardar Cambios" : "Crear Tarea"}
+                  disabled={isSavingTask}
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white font-bold text-xs shadow-md shadow-indigo-600/30 transition-all active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed disabled:active:scale-100">
+                  {isSavingTask
+                    ? "Guardando..."
+                    : editingTask
+                      ? "Guardar Cambios"
+                      : "Crear Tarea"}
                 </button>
               </div>
             </div>
@@ -3470,11 +3495,14 @@ export default function App() {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold shadow-md shadow-indigo-600/30 transition-all flex items-center gap-1.5">
+                  disabled={isCreatingProject}
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold shadow-md shadow-indigo-600/30 transition-all flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed">
                   <span className="material-symbols-outlined text-[16px]">
                     add_circle
                   </span>
-                  <span>Crear Proyecto</span>
+                  <span>
+                    {isCreatingProject ? "Creando..." : "Crear Proyecto"}
+                  </span>
                 </button>
               </div>
             </form>
