@@ -1,5 +1,18 @@
 import React, { useState, useEffect, useRef } from "react";
+<<<<<<< Updated upstream
 import { TaskAPI, AuthAPI, RoleAPI, ProjectAPI } from "./services/api";
+=======
+import { TaskAPI, AuthAPI, RoleAPI, ProjectAPI, setAuthToken } from "./services/api";
+import { initPushNotifications } from "./services/pushNotifications";
+
+// Fecha local (YYYY-MM-DD) — evita el desfase de toISOString() que usa UTC
+const localDateStr = (d = new Date()) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+>>>>>>> Stashed changes
 
 export default function App() {
   // ----------------- AUTHENTICATION STATE -----------------
@@ -17,6 +30,16 @@ export default function App() {
       localStorage.removeItem("taskpulse_custom_projects");
     } catch {}
   }, []);
+
+  // Inicializar notificaciones push en dispositivos móviles
+  useEffect(() => {
+    if (currentUser) {
+      initPushNotifications((notification) => {
+        showToast(`🔔 ${notification.title || "Notificación"}: ${notification.body || ""}`);
+        loadData(false);
+      });
+    }
+  }, [currentUser]);
 
   // ----------------- THEME STATE (LIGHT / DARK) -----------------
   const [theme, setTheme] = useState(() => {
