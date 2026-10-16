@@ -1,0 +1,13 @@
+{
+  "appId": "com.losandestx.tasks",
+  "appName": "TaskPulse",
+  "webDir": "../frontend/dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "PushNotifications": {
+      "presentationOptions": ["badge", "sound", "alert"]
+    }
+  }
+}
