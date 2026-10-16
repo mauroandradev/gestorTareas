@@ -1,9 +1,53 @@
-const isDev =
-  typeof window !== "undefined" &&
-  (window.location.port === "5173" || window.location.port === "3000");
-const API_BASE_URL = isDev
-  ? `http://${window.location.hostname}:8000/api`
-  : "/api";
+import { Capacitor } from "@capacitor/core";
+
+export const API_BASE_URL = (() => {
+  if (typeof window !== "undefined" && Capacitor.isNativePlatform()) {
+    return "https://tasks.losandestx.com/api";
+  }
+  const isDev =
+    typeof window !== "undefined" &&
+    (window.location.port === "5173" || window.location.port === "3000");
+  return isDev ? `http://${window.location.hostname}:8000/api` : "/api";
+})();
+
+let _authToken = null;
+try {
+  _authToken = localStorage.getItem("taskpulse_token");
+} catch {}
+
+export const setAuthToken = (token) => {
+  _authToken = token;
+  try {
+    if (token) {
+      localStorage.setItem("taskpulse_token", token);
+    } else {
+      localStorage.removeItem("taskpulse_token");
+    }
+  } catch {}
+};
+
+export const getAuthToken = () => {
+  if (!_authToken) {
+    try {
+      _authToken = localStorage.getItem("taskpulse_token");
+    } catch {}
+  }
+  return _authToken;
+};
+
+export const authFetch = async (url, options = {}) => {
+  const token = getAuthToken();
+  const headers = {
+    ...(options.headers || {}),
+  };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  return fetch(url, {
+    ...options,
+    headers,
+  });
+};
 
 export const AuthAPI = {
   // Iniciar sesión

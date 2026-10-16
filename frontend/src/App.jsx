@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
-<<<<<<< Updated upstream
-import { TaskAPI, AuthAPI, RoleAPI, ProjectAPI } from "./services/api";
-=======
-import { TaskAPI, AuthAPI, RoleAPI, ProjectAPI, setAuthToken } from "./services/api";
+import {
+  TaskAPI,
+  AuthAPI,
+  RoleAPI,
+  ProjectAPI,
+  setAuthToken,
+} from "./services/api";
 import { initPushNotifications } from "./services/pushNotifications";
 
 // Fecha local (YYYY-MM-DD) — evita el desfase de toISOString() que usa UTC
@@ -12,7 +15,6 @@ const localDateStr = (d = new Date()) => {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 };
->>>>>>> Stashed changes
 
 export default function App() {
   // ----------------- AUTHENTICATION STATE -----------------
@@ -35,7 +37,9 @@ export default function App() {
   useEffect(() => {
     if (currentUser) {
       initPushNotifications((notification) => {
-        showToast(`🔔 ${notification.title || "Notificación"}: ${notification.body || ""}`);
+        showToast(
+          `🔔 ${notification.title || "Notificación"}: ${notification.body || ""}`,
+        );
         loadData(false);
       });
     }
@@ -634,7 +638,8 @@ export default function App() {
       type: "role",
       id: role.id,
       title: role.name,
-      subtitle: "Los usuarios asignados a este rol pasarán automáticamente al rol 'Miembro'.",
+      subtitle:
+        "Los usuarios asignados a este rol pasarán automáticamente al rol 'Miembro'.",
     });
   };
 
@@ -890,7 +895,8 @@ export default function App() {
         updated[statusMap[oldStatus]]--;
       }
       if (statusMap[newStatus]) {
-        updated[statusMap[newStatus]] = (updated[statusMap[newStatus]] || 0) + 1;
+        updated[statusMap[newStatus]] =
+          (updated[statusMap[newStatus]] || 0) + 1;
       }
       return updated;
     });
@@ -1139,7 +1145,9 @@ export default function App() {
     ];
 
     return (
-      <div className="flex items-center gap-1.5 min-w-0" title={list.join(", ")}>
+      <div
+        className="flex items-center gap-1.5 min-w-0"
+        title={list.join(", ")}>
         <div className="flex -space-x-1.5 items-center shrink-0">
           {visible.map((name, idx) => {
             const colorClass = colors[idx % colors.length];
@@ -1607,8 +1615,7 @@ export default function App() {
                 projects.map((proj) => {
                   const isSelected = currentProject === proj.name;
                   const projCount =
-                    stats.project_counts?.[proj.name] ??
-                    (proj.task_count ?? 0);
+                    stats.project_counts?.[proj.name] ?? proj.task_count ?? 0;
                   const isOwner =
                     (proj.owner_name || "").toLowerCase() ===
                     (currentUser?.name || "").toLowerCase();
@@ -1870,7 +1877,10 @@ export default function App() {
                       Todos
                     </option>
                     {users.map((u) => (
-                      <option key={u.id} value={u.name} className="bg-[#131b2e]">
+                      <option
+                        key={u.id}
+                        value={u.name}
+                        className="bg-[#131b2e]">
                         {u.name}
                       </option>
                     ))}
@@ -2601,21 +2611,31 @@ export default function App() {
                   value={formData.project}
                   onChange={(e) => {
                     const newProjName = e.target.value;
-                    const targetProjObj = projects.find((p) => p.name === newProjName);
+                    const targetProjObj = projects.find(
+                      (p) => p.name === newProjName,
+                    );
                     const targetMembers = targetProjObj
                       ? Array.from(
                           new Set(
-                            [targetProjObj.owner_name, ...(targetProjObj.members || [])].filter(Boolean),
+                            [
+                              targetProjObj.owner_name,
+                              ...(targetProjObj.members || []),
+                            ].filter(Boolean),
                           ),
                         )
                       : [];
 
                     // Filter current assignees to only those who belong to the newly selected project
-                    let updatedAssignees = (formData.assignees || []).filter((name) =>
-                      targetMembers.includes(name),
+                    let updatedAssignees = (formData.assignees || []).filter(
+                      (name) => targetMembers.includes(name),
                     );
-                    if (updatedAssignees.length === 0 && targetMembers.length > 0) {
-                      updatedAssignees = targetMembers.includes(currentUser?.name)
+                    if (
+                      updatedAssignees.length === 0 &&
+                      targetMembers.length > 0
+                    ) {
+                      updatedAssignees = targetMembers.includes(
+                        currentUser?.name,
+                      )
                         ? [currentUser.name]
                         : [targetMembers[0]];
                     }
@@ -2644,21 +2664,30 @@ export default function App() {
 
               {/* Multiple Assignees Selection (Strictly filtered by selected project members) */}
               {(() => {
-                const currentTaskProjObj = projects.find((p) => p.name === formData.project);
+                const currentTaskProjObj = projects.find(
+                  (p) => p.name === formData.project,
+                );
                 const allowedProjectMembers = currentTaskProjObj
                   ? Array.from(
                       new Set(
-                        [currentTaskProjObj.owner_name, ...(currentTaskProjObj.members || [])].filter(Boolean),
+                        [
+                          currentTaskProjObj.owner_name,
+                          ...(currentTaskProjObj.members || []),
+                        ].filter(Boolean),
                       ),
                     )
                   : [];
 
                 // Match members with user records
                 const assignableUsers = users.filter((u) =>
-                  allowedProjectMembers.length > 0 ? allowedProjectMembers.includes(u.name) : true,
+                  allowedProjectMembers.length > 0
+                    ? allowedProjectMembers.includes(u.name)
+                    : true,
                 );
 
-                const existingUserNames = new Set(assignableUsers.map((u) => u.name));
+                const existingUserNames = new Set(
+                  assignableUsers.map((u) => u.name),
+                );
                 const fullAssignableUsers = [
                   ...assignableUsers,
                   ...allowedProjectMembers
@@ -2666,7 +2695,10 @@ export default function App() {
                     .map((name) => ({
                       id: `synth-${name}`,
                       name,
-                      role: name === currentTaskProjObj?.owner_name ? "Dueño" : "Miembro",
+                      role:
+                        name === currentTaskProjObj?.owner_name
+                          ? "Dueño"
+                          : "Miembro",
                     })),
                 ];
 
@@ -2676,14 +2708,17 @@ export default function App() {
                       <label className="font-bold text-slate-300 flex items-center gap-1.5">
                         <span>Responsables Asignados</span>
                         <span className="text-[11px] font-normal text-indigo-400">
-                          ({formData.assignees?.length || 0} de {fullAssignableUsers.length} miembros)
+                          ({formData.assignees?.length || 0} de{" "}
+                          {fullAssignableUsers.length} miembros)
                         </span>
                       </label>
                       <div className="flex items-center gap-2 text-[11px]">
                         <button
                           type="button"
                           onClick={() => {
-                            const allNames = fullAssignableUsers.map((u) => u.name);
+                            const allNames = fullAssignableUsers.map(
+                              (u) => u.name,
+                            );
                             setFormData({
                               ...formData,
                               assignees: allNames,
@@ -2720,7 +2755,9 @@ export default function App() {
                             <button
                               type="button"
                               onClick={() => {
-                                const updated = formData.assignees.filter((n) => n !== name);
+                                const updated = formData.assignees.filter(
+                                  (n) => n !== name,
+                                );
                                 setFormData({
                                   ...formData,
                                   assignees: updated,
@@ -2736,7 +2773,8 @@ export default function App() {
                       </div>
                     ) : (
                       <div className="p-2 bg-[#060e20] border border-amber-500/30 rounded-xl text-amber-300/80 text-[11px] italic">
-                        ⚠️ Selecciona al menos un responsable del proyecto abajo.
+                        ⚠️ Selecciona al menos un responsable del proyecto
+                        abajo.
                       </div>
                     )}
 
@@ -2744,8 +2782,11 @@ export default function App() {
                     <div className="max-h-[140px] overflow-y-auto border border-[#222a3d] rounded-xl bg-[#060e20] p-1.5 flex flex-col gap-1">
                       {fullAssignableUsers.length > 0 ? (
                         fullAssignableUsers.map((u) => {
-                          const isOwner = u.name === currentTaskProjObj?.owner_name;
-                          const isChecked = formData.assignees?.includes(u.name);
+                          const isOwner =
+                            u.name === currentTaskProjObj?.owner_name;
+                          const isChecked = formData.assignees?.includes(
+                            u.name,
+                          );
                           return (
                             <label
                               key={u.id}
@@ -2789,7 +2830,8 @@ export default function App() {
                         })
                       ) : (
                         <div className="text-amber-400/90 text-center py-3 italic text-xs bg-amber-950/20 rounded-lg border border-amber-500/20 p-2">
-                          ⚠️ Este proyecto no tiene colaboradores asignados. Agrega miembros al proyecto para asignarles tareas.
+                          ⚠️ Este proyecto no tiene colaboradores asignados.
+                          Agrega miembros al proyecto para asignarles tareas.
                         </div>
                       )}
                     </div>
@@ -2942,7 +2984,9 @@ export default function App() {
                     ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
                     : "text-slate-400 hover:text-white bg-[#131b2e]"
                 }`}>
-                <span className="material-symbols-outlined text-[16px]">group</span>
+                <span className="material-symbols-outlined text-[16px]">
+                  group
+                </span>
                 <span>Usuarios ({users.length})</span>
               </button>
               <button
@@ -2953,7 +2997,9 @@ export default function App() {
                     ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
                     : "text-slate-400 hover:text-white bg-[#131b2e]"
                 }`}>
-                <span className="material-symbols-outlined text-[16px]">badge</span>
+                <span className="material-symbols-outlined text-[16px]">
+                  badge
+                </span>
                 <span>Roles del Equipo ({roles.length})</span>
               </button>
             </div>
@@ -2998,7 +3044,9 @@ export default function App() {
                             </div>
                             <span>{u.name}</span>
                           </td>
-                          <td className="py-2.5 px-3 text-slate-300">{u.email}</td>
+                          <td className="py-2.5 px-3 text-slate-300">
+                            {u.email}
+                          </td>
                           <td className="py-2.5 px-3">
                             <span className="px-2 py-0.5 rounded bg-[#060e20] border border-[#222a3d] text-indigo-300 font-semibold">
                               {u.role}
@@ -3357,7 +3405,8 @@ export default function App() {
                     Nuevo Proyecto
                   </h3>
                   <p className="text-[11px] text-slate-400">
-                    Serás el dueño (👑) de este proyecto y podrás invitar a tu equipo.
+                    Serás el dueño (👑) de este proyecto y podrás invitar a tu
+                    equipo.
                   </p>
                 </div>
               </div>
@@ -3458,7 +3507,9 @@ export default function App() {
                       <div
                         key={u.id || u.name}
                         onClick={() => {
-                          const exists = newProjectForm.members.includes(u.name);
+                          const exists = newProjectForm.members.includes(
+                            u.name,
+                          );
                           const nextMembers = exists
                             ? newProjectForm.members.filter((m) => m !== u.name)
                             : [...newProjectForm.members, u.name];
@@ -3499,9 +3550,7 @@ export default function App() {
                           className={`material-symbols-outlined text-[18px] shrink-0 ${
                             isSelected ? "text-indigo-400" : "text-slate-600"
                           }`}>
-                          {isSelected
-                            ? "check_box"
-                            : "check_box_outline_blank"}
+                          {isSelected ? "check_box" : "check_box_outline_blank"}
                         </span>
                       </div>
                     );
@@ -3632,7 +3681,9 @@ export default function App() {
                     <span className="material-symbols-outlined text-base">
                       verified_user
                     </span>
-                    <span>{editProjectForm.owner_name || currentUser?.name} (Tú)</span>
+                    <span>
+                      {editProjectForm.owner_name || currentUser?.name} (Tú)
+                    </span>
                   </div>
                 )}
               </div>
@@ -3688,7 +3739,9 @@ export default function App() {
                         className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[11px] font-semibold">
                         <span>{m}</span>
                         {m === editProjectForm.owner_name && (
-                          <span className="text-[10px]" title="Dueño">👑</span>
+                          <span className="text-[10px]" title="Dueño">
+                            👑
+                          </span>
                         )}
                         <button
                           type="button"
@@ -3718,8 +3771,7 @@ export default function App() {
                       <div
                         key={u.id || u.name}
                         onClick={() => {
-                          const currentMembers =
-                            editProjectForm.members || [];
+                          const currentMembers = editProjectForm.members || [];
                           const nextMembers = currentMembers.includes(u.name)
                             ? currentMembers.filter((m) => m !== u.name)
                             : [...currentMembers, u.name];
@@ -3760,9 +3812,7 @@ export default function App() {
                           className={`material-symbols-outlined text-[18px] shrink-0 ${
                             isMember ? "text-indigo-400" : "text-slate-600"
                           }`}>
-                          {isMember
-                            ? "check_box"
-                            : "check_box_outline_blank"}
+                          {isMember ? "check_box" : "check_box_outline_blank"}
                         </span>
                       </div>
                     );
