@@ -3,6 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
+from ..core.deps import get_current_user, require_admin
+from ..models.user import User
 from ..core.security import generate_session_token
 from ..schemas.user import UserCreate, UserUpdate, UserResponse, UserLogin, LoginResponse
 from ..services.user_service import UserService
@@ -29,7 +31,7 @@ def login(credentials: UserLogin, db: Session = Depends(get_db)):
 
 
 @router.get("/auth/users", response_model=List[UserResponse], summary="Listar usuarios")
-def get_users(db: Session = Depends(get_db)):
+def get_users(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
     """Listar todos los usuarios registrados en el sistema."""
     return UserService.get_users(db)
 
@@ -40,7 +42,7 @@ def get_users(db: Session = Depends(get_db)):
     status_code=status.HTTP_201_CREATED,
     summary="Crear usuario"
 )
-def create_user(user_in: UserCreate, db: Session = Depends(get_db)):
+def create_user(user_in: UserCreate, db: Session = Depends(get_db), _: User = Depends(require_admin)):
     """Crear un nuevo usuario y asignar su rol (Función de Administrador)."""
     try:
         return UserService.create_user(db, user_in)
@@ -49,7 +51,7 @@ def create_user(user_in: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/auth/users/{user_id}", response_model=UserResponse, summary="Actualizar usuario")
-def update_user(user_id: int, user_in: UserUpdate, db: Session = Depends(get_db)):
+def update_user(user_id: int, user_in: UserUpdate, db: Session = Depends(get_db), _: User = Depends(require_admin)):
     """Actualizar datos, rol o contraseña de un usuario."""
     try:
         user = UserService.update_user(db, user_id, user_in)
@@ -61,7 +63,7 @@ def update_user(user_id: int, user_in: UserUpdate, db: Session = Depends(get_db)
 
 
 @router.delete("/auth/users/{user_id}", summary="Eliminar usuario")
-def delete_user(user_id: int, db: Session = Depends(get_db)):
+def delete_user(user_id: int, db: Session = Depends(get_db), _: User = Depends(require_admin)):
     """Eliminar un usuario del sistema (Función de Administrador)."""
     try:
         success = UserService.delete_user(db, user_id)

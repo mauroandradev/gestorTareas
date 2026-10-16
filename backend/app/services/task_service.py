@@ -1,10 +1,11 @@
 from typing import List, Optional, Dict, Any, Set
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, desc
 
 from ..models.task import Task
 from ..models.project import Project
+from ..models.task_delete_request import TaskDeleteRequest
 from ..schemas.task import TaskCreate, TaskUpdate, TaskStatusUpdate
 
 
@@ -134,6 +135,20 @@ class TaskService:
         # Validate that assignees belong to project
         TaskService._validate_project_assignees(db, task_in.project, assignees_check)
 
+        # Duplicate guard: identical task created within the last few seconds
+        # (double click, retried request, slow network) returns the existing one.
+        title_clean = task_in.title.strip()
+        project_clean = task_in.project.strip() if task_in.project else "General"
+        recent = db.query(Task).filter(
+            Task.title == title_clean,
+            Task.project == project_clean,
+            Task.assignee == assignee_val,
+            Task.due_date == task_in.due_date,
+            Task.created_at >= datetime.utcnow() - timedelta(seconds=30),
+        ).first()
+        if recent:
+            return recent
+
         task = Task(
             title=task_in.title.strip(),
             description=task_in.description.strip() if task_in.description else None,
@@ -233,8 +248,6 @@ class TaskService:
         return True
 
     @staticmethod
-<<<<<<< Updated upstream
-=======
     def create_delete_request(db: Session, task_id: int, requested_by: str) -> TaskDeleteRequest:
         """Register a request for an admin to delete a task (no duplicates while pending)."""
         task = TaskService.get_task_by_id(db, task_id)
@@ -302,6 +315,7 @@ class TaskService:
         req.resolved_at = datetime.utcnow()
         db.commit()
         db.refresh(req)
+        appAndroid
 
         # Enviar notificación push al solicitante
         try:
@@ -321,7 +335,7 @@ class TaskService:
         return req
 
     @staticmethod
->>>>>>> Stashed changes
+    
     def rename_project(db: Session, old_name: str, new_name: str) -> int:
         """Rename all tasks associated with old_name to new_name."""
         old_clean = old_name.strip()

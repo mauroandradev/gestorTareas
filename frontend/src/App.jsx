@@ -18,19 +18,32 @@ const localDateStr = (d = new Date()) => {
 
 export default function App() {
   // ----------------- AUTHENTICATION STATE -----------------
-  const [currentUser, setCurrentUser] = useState(null);
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const savedUser = localStorage.getItem("taskpulse_user");
+      const savedToken = localStorage.getItem("taskpulse_token");
+      if (savedUser && savedToken) {
+        return JSON.parse(savedUser);
+      }
+    } catch {}
+    return null;
+  });
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState("");
 
-  // Purge any residual items in localStorage (except theme)
+  // Escuchar cuando el token expira o es inválido para cerrar sesión
   useEffect(() => {
-    try {
-      localStorage.removeItem("taskpulse_user");
-      localStorage.removeItem("taskpulse_deleted_projects");
-      localStorage.removeItem("taskpulse_custom_projects");
-    } catch {}
+    const handleUnauthorized = () => {
+      setCurrentUser(null);
+      try {
+        localStorage.removeItem("taskpulse_user");
+      } catch {}
+      showToast("Tu sesión ha expirado. Por favor inicia sesión nuevamente.", "error");
+    };
+    window.addEventListener("taskpulse:unauthorized", handleUnauthorized);
+    return () => window.removeEventListener("taskpulse:unauthorized", handleUnauthorized);
   }, []);
 
   // Inicializar notificaciones push en dispositivos móviles
@@ -179,6 +192,14 @@ export default function App() {
     subtitle: "",
   });
 
+  // Task Detail (read-only) Modal State
+  const [isViewOpen, setIsViewOpen] = useState(false);
+  const [viewingTask, setViewingTask] = useState(null);
+
+  // Deletion requests (non-admin users ask, admins approve)
+  const [deleteRequests, setDeleteRequests] = useState([]);
+  const [isDeleteRequestsOpen, setIsDeleteRequestsOpen] = useState(false);
+
   // Toast State
   const [toast, setToast] = useState(null);
 
@@ -311,6 +332,13 @@ export default function App() {
         },
       );
       setUsers(usersData || []);
+      if (isAdmin) {
+        TaskAPI.getDeleteRequests(true)
+          .then((reqs) => setDeleteRequests(reqs || []))
+          .catch(() => {});
+      } else {
+        setDeleteRequests([]);
+      }
     } catch (err) {
       console.error(err);
       showToast("Error de conexión con el servidor", "error");
@@ -364,6 +392,9 @@ export default function App() {
       setAuthError("");
       const data = await AuthAPI.login(loginEmail, loginPassword);
       setCurrentUser(data.user);
+      try {
+        localStorage.setItem("taskpulse_user", JSON.stringify(data.user));
+      } catch {}
       showToast(`¡Bienvenido de nuevo, ${data.user.name}!`);
     } catch (err) {
       setAuthError(err.message || "Credenciales incorrectas");
@@ -374,6 +405,10 @@ export default function App() {
 
   const handleLogout = () => {
     setCurrentUser(null);
+    setAuthToken(null);
+    try {
+      localStorage.removeItem("taskpulse_user");
+    } catch {}
     showToast("Sesión cerrada correctamente");
   };
 
@@ -647,11 +682,54 @@ export default function App() {
   const openDeleteTaskModal = (task) => {
     setDeleteModal({
       isOpen: true,
-      type: "task",
+      // Solo los administradores eliminan directamente; el resto solicita permiso
+      type: isAdmin ? "task" : "task-request",
       id: task.id,
       title: task.title,
       subtitle: `Proyecto: ${task.project || "General"} • Responsable: ${task.assignee || "Sin asignar"}`,
     });
+  };
+
+  // ----------------- TASK DETAIL VIEW (READ-ONLY) -----------------
+  const handleOpenView = (task) => {
+    setViewingTask(task);
+    setIsViewOpen(true);
+  };
+
+  const handleEditFromView = () => {
+    if (!viewingTask) return;
+    const task = viewingTask;
+    setIsViewOpen(false);
+    handleOpenEdit(task);
+  };
+
+  // ----------------- DELETE REQUESTS (ADMIN) -----------------
+  const handleOpenDeleteRequests = async () => {
+    setIsDeleteRequestsOpen(true);
+    try {
+      setDeleteRequests((await TaskAPI.getDeleteRequests(isAdmin)) || []);
+    } catch (err) {
+      showToast(err.message || "Error al cargar solicitudes", "error");
+    }
+  };
+
+  const handleResolveDeleteRequest = async (req, approve) => {
+    try {
+      await TaskAPI.resolveDeleteRequest(
+        req.id,
+        approve,
+        currentUser?.name,
+        isAdmin,
+      );
+      showToast(
+        approve
+          ? `Tarea "${req.task_title}" eliminada`
+          : "Solicitud rechazada",
+      );
+      loadData(false);
+    } catch (err) {
+      showToast(err.message || "Error al resolver la solicitud", "error");
+    }
   };
 
   const openDeleteProjectModal = (projectName, taskCount = 0) => {
@@ -693,8 +771,18 @@ export default function App() {
   const handleConfirmDelete = async () => {
     if (!deleteModal.id) return;
     try {
-      if (deleteModal.type === "task") {
-        await TaskAPI.deleteTask(deleteModal.id);
+      if (deleteModal.type === "task-request") {
+        await TaskAPI.requestDelete(deleteModal.id, currentUser?.name);
+        showToast(
+          "Solicitud enviada. Un administrador debe aprobar la eliminación.",
+        );
+        if (isModalOpen && editingTask?.id === deleteModal.id) {
+          setIsModalOpen(false);
+        }
+        setIsViewOpen(false);
+      } else if (deleteModal.type === "task") {
+        await TaskAPI.deleteTask(deleteModal.id, isAdmin);
+        setIsViewOpen(false);
         showToast("Tarea eliminada correctamente");
         if (isModalOpen && editingTask?.id === deleteModal.id) {
           setIsModalOpen(false);
@@ -741,7 +829,7 @@ export default function App() {
   // ----------------- TASK ACTIONS -----------------
   const handleOpenCreate = (prefilledDate = null) => {
     setEditingTask(null);
-    const today = new Date().toISOString().split("T")[0];
+    const today = localDateStr();
 
     const selectedProj =
       currentProject !== "Todos" && projectList.includes(currentProject)
@@ -870,9 +958,9 @@ export default function App() {
 
     const oldStatus = taskToUpdate.status;
     const oldCompletedAt = taskToUpdate.completed_at;
-    const todayStr = new Date().toISOString().split("T")[0];
-    const newCompletedAt =
-      newStatus === "Completada" ? oldCompletedAt || todayStr : null;
+    const todayStr = localDateStr();
+    // Al completar siempre se registra la fecha real de hoy (no la fecha límite)
+    const newCompletedAt = newStatus === "Completada" ? todayStr : null;
 
     // 1. Instant Optimistic State Update (0ms delay)
     setTasks((prev) =>
@@ -1461,6 +1549,24 @@ export default function App() {
             </button>
           )}
 
+          {/* Admin: Pending task deletion requests */}
+          {isAdmin && (
+            <button
+              onClick={handleOpenDeleteRequests}
+              className="relative flex items-center gap-1 px-2.5 sm:px-3 py-1.5 bg-[#131b2e] hover:bg-[#222a3d] text-rose-300 hover:text-rose-200 border border-rose-500/30 rounded-xl text-xs font-bold transition-all shadow-sm"
+              title="Solicitudes de eliminación de tareas">
+              <span className="material-symbols-outlined text-[16px]">
+                delete_sweep
+              </span>
+              <span className="hidden sm:inline">Solicitudes</span>
+              {deleteRequests.length > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+                  {deleteRequests.length}
+                </span>
+              )}
+            </button>
+          )}
+
           {/* New Task Button */}
           <button
             onClick={() => handleOpenCreate()}
@@ -2014,7 +2120,7 @@ export default function App() {
                               {/* 1. Header (Fixed 42px height): Title (2-lines max) & Priority Badge */}
                               <div className="h-[42px] min-h-[42px] max-h-[42px] flex items-start justify-between gap-2 overflow-hidden">
                                 <h4
-                                  onClick={() => handleOpenEdit(task)}
+                                  onClick={() => handleOpenView(task)}
                                   className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white hover:text-indigo-600 dark:hover:text-indigo-300 transition-colors leading-snug cursor-pointer line-clamp-2"
                                   title={task.title}>
                                   {task.title}
@@ -2044,7 +2150,7 @@ export default function App() {
                                   📁 {task.project}
                                 </span>
 
-                                {task.due_date && (
+                                {task.status !== "Completada" && task.due_date && (
                                   <span className="text-amber-800 dark:text-amber-300 font-semibold flex items-center gap-0.5 shrink-0">
                                     <span className="material-symbols-outlined text-[12px]">
                                       schedule
@@ -2053,9 +2159,11 @@ export default function App() {
                                   </span>
                                 )}
 
-                                {task.completed_at && (
-                                  <span className="text-emerald-800 dark:text-emerald-400 font-bold truncate shrink-0">
-                                    ✓ {task.completed_at}
+                                {task.status === "Completada" && task.completed_at && (
+                                  <span
+                                    className="text-emerald-800 dark:text-emerald-400 font-bold truncate shrink-0"
+                                    title={`Completada el ${task.completed_at}${task.due_date ? ` (límite: ${task.due_date})` : ""}`}>
+                                    ✓ Completada: {task.completed_at}
                                   </span>
                                 )}
                               </div>
@@ -2166,7 +2274,7 @@ export default function App() {
                                 className={`w-3 h-3 rounded-full shrink-0 ${statusStyle.dotColor}`}
                                 title={`Estado: ${task.status}`}></span>
                               <h4
-                                onClick={() => handleOpenEdit(task)}
+                                onClick={() => handleOpenView(task)}
                                 className={`text-xs sm:text-sm font-bold cursor-pointer transition-colors leading-snug break-words ${statusStyle.titleColor}`}>
                                 {task.title}
                               </h4>
@@ -2267,7 +2375,7 @@ export default function App() {
                                     className={`w-3 h-3 rounded-full shrink-0 ${statusStyle.dotColor}`}
                                     title={`Estado: ${task.status}`}></span>
                                   <span
-                                    onClick={() => handleOpenEdit(task)}
+                                    onClick={() => handleOpenView(task)}
                                     className={`cursor-pointer truncate transition-colors ${statusStyle.titleColor}`}
                                     title={task.title}>
                                     {task.title}
@@ -2511,7 +2619,7 @@ export default function App() {
                         className="p-3 bg-[#060e20] border border-[#222a3d] rounded-xl flex flex-col gap-2 hover:border-slate-500 transition-colors">
                         <div className="flex items-start justify-between gap-2">
                           <h4
-                            onClick={() => handleOpenEdit(task)}
+                            onClick={() => handleOpenView(task)}
                             className="text-xs font-bold text-white hover:text-indigo-300 cursor-pointer">
                             {task.title}
                           </h4>
@@ -3857,7 +3965,9 @@ export default function App() {
                 </span>
               </div>
               <h3 className="text-lg font-bold text-white tracking-tight">
-                {deleteModal.type === "task"
+                {deleteModal.type === "task-request"
+                  ? "¿Solicitar Eliminación de Tarea?"
+                  : deleteModal.type === "task"
                   ? "¿Eliminar Tarea?"
                   : deleteModal.type === "project"
                     ? "¿Eliminar Proyecto y sus Tareas?"
@@ -3866,7 +3976,9 @@ export default function App() {
                       : "¿Eliminar Usuario?"}
               </h3>
               <p className="text-xs text-slate-300 leading-relaxed max-w-sm">
-                ¿Estás seguro de que deseas eliminar permanentemente:
+                {deleteModal.type === "task-request"
+                  ? "Solo un administrador puede eliminar tareas. Se enviará una solicitud para:"
+                  : "¿Estás seguro de que deseas eliminar permanentemente:"}
               </p>
               <div className="px-3 py-2 bg-[#060e20] border border-[#222a3d] rounded-xl text-xs font-bold text-rose-300 max-w-full break-words">
                 "{deleteModal.title}"
@@ -3877,7 +3989,9 @@ export default function App() {
                 </span>
               )}
               <p className="text-[11px] text-slate-500 italic mt-1">
-                Esta acción no se puede deshacer.
+                {deleteModal.type === "task-request"
+                  ? "La tarea no se eliminará hasta que un administrador apruebe la solicitud."
+                  : "Esta acción no se puede deshacer."}
               </p>
             </div>
 
@@ -3903,9 +4017,201 @@ export default function App() {
                 <span className="material-symbols-outlined text-[16px]">
                   delete
                 </span>
-                <span>Sí, Eliminar</span>
+                <span>
+                  {deleteModal.type === "task-request"
+                    ? "Enviar Solicitud"
+                    : "Sí, Eliminar"}
+                </span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: DETALLE DE TAREA (SOLO LECTURA)
+      ========================================================================= */}
+      {isViewOpen && viewingTask && (
+        <div
+          className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4 overflow-y-auto"
+          onClick={() => setIsViewOpen(false)}>
+          <div
+            className="bg-[#0b1326] border border-[#222a3d] rounded-2xl sm:rounded-3xl w-full max-w-lg shadow-2xl flex flex-col max-h-[92vh] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-[#222a3d] flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">
+                  Detalle de la tarea
+                </p>
+                <h3 className="text-base font-bold text-white break-words">
+                  {viewingTask.title}
+                </h3>
+              </div>
+              <button
+                onClick={() => setIsViewOpen(false)}
+                className="text-slate-400 hover:text-white p-1.5 rounded-xl hover:bg-[#131b2e] transition-colors shrink-0"
+                title="Cerrar">
+                <span className="material-symbols-outlined text-xl">close</span>
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto flex flex-col gap-4 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="px-2.5 py-1 rounded-lg bg-indigo-950 border border-indigo-500/40 text-indigo-200 font-bold">
+                  {viewingTask.status}
+                </span>
+                <span
+                  className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border ${getPriorityBadge(viewingTask.priority)}`}>
+                  Prioridad: {viewingTask.priority}
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-[#060e20] border border-[#222a3d] text-indigo-300 font-bold">
+                  📁 {viewingTask.project || "General"}
+                </span>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <span className="font-bold text-slate-400">Descripción</span>
+                <p className="text-slate-200 leading-relaxed whitespace-pre-wrap break-words bg-[#060e20] border border-[#222a3d] rounded-xl p-3">
+                  {viewingTask.description || "Sin descripción adicional"}
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <span className="font-bold text-slate-400">Responsables</span>
+                <div className="bg-[#060e20] border border-[#222a3d] rounded-xl p-3 text-slate-200">
+                  {viewingTask.assignee || "Sin asignar"}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="flex flex-col gap-1">
+                  <span className="font-bold text-slate-400">Fecha de inicio</span>
+                  <span className="bg-[#060e20] border border-[#222a3d] rounded-xl p-2.5 text-slate-200">
+                    {viewingTask.start_date || "—"}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <span className="font-bold text-slate-400">Fecha límite</span>
+                  <span className="bg-[#060e20] border border-[#222a3d] rounded-xl p-2.5 text-amber-300">
+                    {viewingTask.due_date || "—"}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <span className="font-bold text-slate-400">Completada el</span>
+                  <span className="bg-[#060e20] border border-[#222a3d] rounded-xl p-2.5 text-emerald-300">
+                    {viewingTask.status === "Completada" &&
+                    viewingTask.completed_at
+                      ? viewingTask.completed_at
+                      : "—"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-5 py-3.5 border-t border-[#222a3d] bg-[#070e1e] flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => openDeleteTaskModal(viewingTask)}
+                className="px-3 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-bold transition-all flex items-center gap-1 active:scale-95"
+                title={
+                  isAdmin ? "Eliminar esta tarea" : "Solicitar eliminación a un administrador"
+                }>
+                <span className="material-symbols-outlined text-[15px]">
+                  delete
+                </span>
+                <span className="hidden sm:inline">
+                  {isAdmin ? "Eliminar" : "Solicitar eliminación"}
+                </span>
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsViewOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-[#131b2e] hover:bg-[#222a3d] text-slate-300 font-semibold text-xs transition-colors">
+                  Cerrar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleEditFromView}
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white font-bold text-xs shadow-md shadow-indigo-600/30 transition-all active:scale-95 flex items-center gap-1">
+                  <span className="material-symbols-outlined text-[15px]">
+                    edit
+                  </span>
+                  Editar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: SOLICITUDES DE ELIMINACIÓN DE TAREAS (SOLO ADMIN)
+      ========================================================================= */}
+      {isDeleteRequestsOpen && isAdmin && (
+        <div
+          className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+          onClick={() => setIsDeleteRequestsOpen(false)}>
+          <div
+            className="bg-[#0b1326] border border-[#222a3d] rounded-3xl w-full max-w-xl p-5 sm:p-6 shadow-2xl flex flex-col gap-4 max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between pb-3 border-b border-[#222a3d]">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-rose-400">
+                  delete_sweep
+                </span>
+                <div>
+                  <h3 className="text-base font-bold text-white">
+                    Solicitudes de eliminación
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Tareas que los usuarios piden eliminar
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsDeleteRequestsOpen(false)}
+                className="text-slate-400 hover:text-white p-1.5 rounded-xl hover:bg-[#131b2e] transition-colors"
+                title="Cerrar">
+                <span className="material-symbols-outlined text-xl">close</span>
+              </button>
+            </div>
+
+            {deleteRequests.length === 0 ? (
+              <div className="text-center py-10 text-xs text-slate-500 italic">
+                No hay solicitudes pendientes.
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2.5">
+                {deleteRequests.map((req) => (
+                  <div
+                    key={req.id}
+                    className="p-3 bg-[#060e20] border border-[#222a3d] rounded-xl flex flex-col gap-2">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-sm font-bold text-white break-words">
+                        {req.task_title}
+                      </span>
+                      <span className="text-[11px] text-slate-400">
+                        Proyecto: {req.project || "General"} • Solicitada por{" "}
+                        <b className="text-slate-200">{req.requested_by}</b>
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        onClick={() => handleResolveDeleteRequest(req, false)}
+                        className="px-3 py-1.5 rounded-lg bg-[#131b2e] hover:bg-[#222a3d] text-slate-300 text-xs font-bold transition-colors">
+                        Rechazar
+                      </button>
+                      <button
+                        onClick={() => handleResolveDeleteRequest(req, true)}
+                        className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white text-xs font-bold shadow-md shadow-rose-600/30 transition-all active:scale-95">
+                        Aprobar y eliminar
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

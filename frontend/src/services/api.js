@@ -63,19 +63,23 @@ export const AuthAPI = {
         .catch(() => ({ detail: "Error de autenticación" }));
       throw new Error(err.detail || "Credenciales incorrectas");
     }
-    return res.json();
+    const data = await res.json();
+    if (data.token) {
+      setAuthToken(data.token);
+    }
+    return data;
   },
 
   // Obtener lista de usuarios
   getUsers: async () => {
-    const res = await fetch(`${API_BASE_URL}/auth/users`);
+    const res = await authFetch(`${API_BASE_URL}/auth/users`);
     if (!res.ok) throw new Error("Error al obtener lista de usuarios");
     return res.json();
   },
 
   // Crear nuevo usuario (Admin)
   createUser: async (userData) => {
-    const res = await fetch(`${API_BASE_URL}/auth/users`, {
+    const res = await authFetch(`${API_BASE_URL}/auth/users`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(userData),
@@ -91,7 +95,7 @@ export const AuthAPI = {
 
   // Actualizar usuario / rol (Admin)
   updateUser: async (id, userData) => {
-    const res = await fetch(`${API_BASE_URL}/auth/users/${id}`, {
+    const res = await authFetch(`${API_BASE_URL}/auth/users/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(userData),
@@ -107,7 +111,7 @@ export const AuthAPI = {
 
   // Eliminar usuario (Admin)
   deleteUser: async (id) => {
-    const res = await fetch(`${API_BASE_URL}/auth/users/${id}`, {
+    const res = await authFetch(`${API_BASE_URL}/auth/users/${id}`, {
       method: "DELETE",
     });
     if (!res.ok) {
@@ -121,7 +125,7 @@ export const AuthAPI = {
 };
 
 export const TaskAPI = {
-  // Obtener tareas con filtros (búsqueda, estado, prioridad, proyecto, fechas, usuario)
+  // Obtener tareas con filtros
   getTasks: async (filters = {}) => {
     const params = new URLSearchParams();
     if (filters.search) params.append("search", filters.search);
@@ -135,27 +139,22 @@ export const TaskAPI = {
       params.append("assignee", filters.assignee);
     if (filters.fromDate) params.append("from_date", filters.fromDate);
     if (filters.toDate) params.append("to_date", filters.toDate);
-    if (filters.user_name) params.append("user_name", filters.user_name);
-    if (filters.is_admin !== undefined) params.append("is_admin", String(filters.is_admin));
 
-    const res = await fetch(`${API_BASE_URL}/tasks?${params.toString()}`);
+    const res = await authFetch(`${API_BASE_URL}/tasks?${params.toString()}`);
+    if (!res.ok) throw new Error("Error al obtener tareas");
     return res.json();
   },
 
-  // Obtener estadísticas rápidas y lista de proyectos con permisos
-  getStats: async (options = {}) => {
-    const params = new URLSearchParams();
-    if (options.user_name) params.append("user_name", options.user_name);
-    if (options.is_admin !== undefined) params.append("is_admin", String(options.is_admin));
-
-    const queryStr = params.toString() ? `?${params.toString()}` : "";
-    const res = await fetch(`${API_BASE_URL}/stats${queryStr}`);
+  // Obtener estadísticas rápidas y lista de proyectos
+  getStats: async () => {
+    const res = await authFetch(`${API_BASE_URL}/stats`);
+    if (!res.ok) throw new Error("Error al obtener estadísticas");
     return res.json();
   },
 
   // Crear tarea
   createTask: async (taskData) => {
-    const res = await fetch(`${API_BASE_URL}/tasks`, {
+    const res = await authFetch(`${API_BASE_URL}/tasks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(taskData),
@@ -171,7 +170,7 @@ export const TaskAPI = {
 
   // Actualizar tarea completa
   updateTask: async (id, taskData) => {
-    const res = await fetch(`${API_BASE_URL}/tasks/${id}`, {
+    const res = await authFetch(`${API_BASE_URL}/tasks/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(taskData),
@@ -187,7 +186,7 @@ export const TaskAPI = {
 
   // Cambiar estado rápido
   updateStatus: async (id, status) => {
-    const res = await fetch(`${API_BASE_URL}/tasks/${id}/status`, {
+    const res = await authFetch(`${API_BASE_URL}/tasks/${id}/status`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status }),
@@ -196,52 +195,81 @@ export const TaskAPI = {
     return res.json();
   },
 
-  // Eliminar tarea
+  // Eliminar tarea (solo Administrador)
   deleteTask: async (id) => {
-    const res = await fetch(`${API_BASE_URL}/tasks/${id}`, {
+    const res = await authFetch(`${API_BASE_URL}/tasks/${id}`, {
       method: "DELETE",
     });
-    if (!res.ok) throw new Error("Error al eliminar tarea");
+    if (!res.ok) {
+      const err = await res
+        .json()
+        .catch(() => ({ detail: "Error al eliminar tarea" }));
+      throw new Error(err.detail || "Error al eliminar tarea");
+    }
+    return res.json();
+  },
+
+  // Solicitar a un administrador la eliminación de una tarea
+  requestDelete: async (id) => {
+    const res = await authFetch(`${API_BASE_URL}/tasks/${id}/delete-request`, {
+      method: "POST",
+    });
+    if (!res.ok) {
+      const err = await res
+        .json()
+        .catch(() => ({ detail: "Error al enviar la solicitud" }));
+      throw new Error(err.detail || "Error al enviar la solicitud");
+    }
+    return res.json();
+  },
+
+  // Listar solicitudes de eliminación pendientes (Admin)
+  getDeleteRequests: async () => {
+    const res = await authFetch(`${API_BASE_URL}/tasks/delete-requests`);
+    if (!res.ok) throw new Error("Error al obtener solicitudes");
+    return res.json();
+  },
+
+  // Aprobar / rechazar solicitud (Admin)
+  resolveDeleteRequest: async (requestId, approve) => {
+    const res = await authFetch(
+      `${API_BASE_URL}/tasks/delete-requests/${requestId}/${approve ? "approve" : "reject"}`,
+      { method: "POST" },
+    );
+    if (!res.ok) {
+      const err = await res
+        .json()
+        .catch(() => ({ detail: "Error al resolver la solicitud" }));
+      throw new Error(err.detail || "Error al resolver la solicitud");
+    }
     return res.json();
   },
 
   // Renombrar proyecto y sus tareas asociadas
-  renameProject: async (projectName, newName, currentUser, isAdmin) => {
-    return ProjectAPI.updateProject(
-      projectName,
-      { new_name: newName, name: newName },
-      currentUser,
-      isAdmin
-    );
+  renameProject: async (projectName, newName) => {
+    return ProjectAPI.updateProject(projectName, {
+      new_name: newName,
+      name: newName,
+    });
   },
 
   // Eliminar proyecto completo y sus tareas
-  deleteProject: async (projectName, currentUser, isAdmin) => {
-    return ProjectAPI.deleteProject(projectName, currentUser, isAdmin);
+  deleteProject: async (projectName) => {
+    return ProjectAPI.deleteProject(projectName);
   },
 };
 
 export const ProjectAPI = {
   // Obtener lista completa de proyectos con permisos
-  getProjects: async (options = {}) => {
-    const params = new URLSearchParams();
-    if (options.user_name) params.append("user_name", options.user_name);
-    if (options.is_admin !== undefined)
-      params.append("is_admin", String(options.is_admin));
-
-    const queryStr = params.toString() ? `?${params.toString()}` : "";
-    const res = await fetch(`${API_BASE_URL}/projects${queryStr}`);
+  getProjects: async () => {
+    const res = await authFetch(`${API_BASE_URL}/projects`);
     if (!res.ok) throw new Error("Error al obtener lista de proyectos");
     return res.json();
   },
 
   // Crear nuevo proyecto con dueño y miembros
-  createProject: async (projectData, creatorName) => {
-    const params = new URLSearchParams();
-    if (creatorName) params.append("creator_name", creatorName);
-
-    const queryStr = params.toString() ? `?${params.toString()}` : "";
-    const res = await fetch(`${API_BASE_URL}/projects${queryStr}`, {
+  createProject: async (projectData) => {
+    const res = await authFetch(`${API_BASE_URL}/projects`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(projectData),
@@ -256,19 +284,14 @@ export const ProjectAPI = {
   },
 
   // Actualizar proyecto (nombre, descripción, dueño, miembros)
-  updateProject: async (projectName, projectData, currentUser, isAdmin) => {
-    const params = new URLSearchParams();
-    if (currentUser) params.append("current_user", currentUser);
-    if (isAdmin !== undefined) params.append("is_admin", String(isAdmin));
-
-    const queryStr = params.toString() ? `?${params.toString()}` : "";
-    const res = await fetch(
-      `${API_BASE_URL}/projects/${encodeURIComponent(projectName)}${queryStr}`,
+  updateProject: async (projectName, projectData) => {
+    const res = await authFetch(
+      `${API_BASE_URL}/projects/${encodeURIComponent(projectName)}`,
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(projectData),
-      }
+      },
     );
     if (!res.ok) {
       const err = await res
@@ -280,19 +303,14 @@ export const ProjectAPI = {
   },
 
   // Agregar miembro al proyecto
-  addMember: async (projectName, memberName, currentUser, isAdmin) => {
-    const params = new URLSearchParams();
-    if (currentUser) params.append("current_user", currentUser);
-    if (isAdmin !== undefined) params.append("is_admin", String(isAdmin));
-
-    const queryStr = params.toString() ? `?${params.toString()}` : "";
-    const res = await fetch(
-      `${API_BASE_URL}/projects/${encodeURIComponent(projectName)}/members${queryStr}`,
+  addMember: async (projectName, memberName) => {
+    const res = await authFetch(
+      `${API_BASE_URL}/projects/${encodeURIComponent(projectName)}/members`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ member_name: memberName }),
-      }
+      },
     );
     if (!res.ok) {
       const err = await res
@@ -304,17 +322,12 @@ export const ProjectAPI = {
   },
 
   // Remover miembro del proyecto
-  removeMember: async (projectName, memberName, currentUser, isAdmin) => {
-    const params = new URLSearchParams();
-    if (currentUser) params.append("current_user", currentUser);
-    if (isAdmin !== undefined) params.append("is_admin", String(isAdmin));
-
-    const queryStr = params.toString() ? `?${params.toString()}` : "";
-    const res = await fetch(
-      `${API_BASE_URL}/projects/${encodeURIComponent(projectName)}/members/${encodeURIComponent(memberName)}${queryStr}`,
+  removeMember: async (projectName, memberName) => {
+    const res = await authFetch(
+      `${API_BASE_URL}/projects/${encodeURIComponent(projectName)}/members/${encodeURIComponent(memberName)}`,
       {
         method: "DELETE",
-      }
+      },
     );
     if (!res.ok) {
       const err = await res
@@ -326,17 +339,12 @@ export const ProjectAPI = {
   },
 
   // Eliminar proyecto completo y sus tareas
-  deleteProject: async (projectName, currentUser, isAdmin) => {
-    const params = new URLSearchParams();
-    if (currentUser) params.append("current_user", currentUser);
-    if (isAdmin !== undefined) params.append("is_admin", String(isAdmin));
-
-    const queryStr = params.toString() ? `?${params.toString()}` : "";
-    const res = await fetch(
-      `${API_BASE_URL}/projects/${encodeURIComponent(projectName)}${queryStr}`,
+  deleteProject: async (projectName) => {
+    const res = await authFetch(
+      `${API_BASE_URL}/projects/${encodeURIComponent(projectName)}`,
       {
         method: "DELETE",
-      }
+      },
     );
     if (!res.ok) {
       const err = await res
@@ -351,14 +359,14 @@ export const ProjectAPI = {
 export const RoleAPI = {
   // Listar todos los roles
   getRoles: async () => {
-    const res = await fetch(`${API_BASE_URL}/roles`);
+    const res = await authFetch(`${API_BASE_URL}/roles`);
     if (!res.ok) throw new Error("Error al obtener lista de roles");
     return res.json();
   },
 
   // Crear nuevo rol
   createRole: async (roleData) => {
-    const res = await fetch(`${API_BASE_URL}/roles`, {
+    const res = await authFetch(`${API_BASE_URL}/roles`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(roleData),
@@ -374,7 +382,7 @@ export const RoleAPI = {
 
   // Modificar rol existente
   updateRole: async (id, roleData) => {
-    const res = await fetch(`${API_BASE_URL}/roles/${id}`, {
+    const res = await authFetch(`${API_BASE_URL}/roles/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(roleData),
@@ -390,7 +398,7 @@ export const RoleAPI = {
 
   // Eliminar rol
   deleteRole: async (id) => {
-    const res = await fetch(`${API_BASE_URL}/roles/${id}`, {
+    const res = await authFetch(`${API_BASE_URL}/roles/${id}`, {
       method: "DELETE",
     });
     if (!res.ok) {
