@@ -77,6 +77,11 @@ class Settings:
         return resolve_frontend_dir()
 
     CORS_ORIGINS: List[str] = [
+        "https://tasks.losandestx.com",
+        "http://tasks.losandestx.com",
+        "https://localhost",
+        "capacitor://localhost",
+        "http://localhost",
         "http://localhost:3000",
         "http://localhost:5173",
         "http://127.0.0.1:3000",

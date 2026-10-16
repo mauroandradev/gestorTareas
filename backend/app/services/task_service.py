@@ -1,10 +1,11 @@
 from typing import List, Optional, Dict, Any, Set
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, desc
 
 from ..models.task import Task
 from ..models.project import Project
+from ..models.task_delete_request import TaskDeleteRequest
 from ..schemas.task import TaskCreate, TaskUpdate, TaskStatusUpdate
 
 
@@ -134,6 +135,20 @@ class TaskService:
         # Validate that assignees belong to project
         TaskService._validate_project_assignees(db, task_in.project, assignees_check)
 
+        # Duplicate guard: identical task created within the last few seconds
+        # (double click, retried request, slow network) returns the existing one.
+        title_clean = task_in.title.strip()
+        project_clean = task_in.project.strip() if task_in.project else "General"
+        recent = db.query(Task).filter(
+            Task.title == title_clean,
+            Task.project == project_clean,
+            Task.assignee == assignee_val,
+            Task.due_date == task_in.due_date,
+            Task.created_at >= datetime.utcnow() - timedelta(seconds=30),
+        ).first()
+        if recent:
+            return recent
+
         task = Task(
             title=task_in.title.strip(),
             description=task_in.description.strip() if task_in.description else None,
@@ -216,6 +231,61 @@ class TaskService:
         db.delete(task)
         db.commit()
         return True
+
+    @staticmethod
+    def create_delete_request(db: Session, task_id: int, requested_by: str) -> TaskDeleteRequest:
+        """Register a request for an admin to delete a task (no duplicates while pending)."""
+        task = TaskService.get_task_by_id(db, task_id)
+        if not task:
+            raise ValueError("Tarea no encontrada")
+
+        existing = db.query(TaskDeleteRequest).filter(
+            TaskDeleteRequest.task_id == task_id,
+            TaskDeleteRequest.status == "Pendiente",
+        ).first()
+        if existing:
+            return existing
+
+        req = TaskDeleteRequest(
+            task_id=task.id,
+            task_title=task.title,
+            project=task.project,
+            requested_by=(requested_by or "Desconocido").strip(),
+            status="Pendiente",
+        )
+        db.add(req)
+        db.commit()
+        db.refresh(req)
+        return req
+
+    @staticmethod
+    def get_delete_requests(db: Session, only_pending: bool = True) -> List[TaskDeleteRequest]:
+        query = db.query(TaskDeleteRequest)
+        if only_pending:
+            query = query.filter(TaskDeleteRequest.status == "Pendiente")
+        return query.order_by(desc(TaskDeleteRequest.created_at)).all()
+
+    @staticmethod
+    def resolve_delete_request(db: Session, request_id: int, approve: bool, admin_name: str) -> Optional[TaskDeleteRequest]:
+        """Approve (deletes the task) or reject a pending deletion request."""
+        req = db.query(TaskDeleteRequest).filter(TaskDeleteRequest.id == request_id).first()
+        if not req:
+            return None
+        if req.status != "Pendiente":
+            raise ValueError("La solicitud ya fue resuelta")
+
+        if approve:
+            task = TaskService.get_task_by_id(db, req.task_id)
+            if task:
+                db.delete(task)
+            req.status = "Aprobada"
+        else:
+            req.status = "Rechazada"
+        req.resolved_by = (admin_name or "Administrador").strip()
+        req.resolved_at = datetime.utcnow()
+        db.commit()
+        db.refresh(req)
+        return req
 
     @staticmethod
     def rename_project(db: Session, old_name: str, new_name: str) -> int:
