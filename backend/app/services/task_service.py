@@ -164,6 +164,21 @@ class TaskService:
         db.add(task)
         db.commit()
         db.refresh(task)
+
+        # Enviar notificación push a los asignados
+        try:
+            from .notification_service import NotificationService
+            tokens = NotificationService.get_tokens_for_users(db, assignees_check)
+            if tokens:
+                NotificationService.send_push(
+                    tokens=tokens,
+                    title="Nueva tarea asignada",
+                    body=f"Se te ha asignado: {task.title} ({task.project})",
+                    data={"task_id": str(task.id), "type": "task_assigned"}
+                )
+        except Exception as e:
+            print(f"[PUSH] Aviso asignación: {e}")
+
         return task
 
     @staticmethod
@@ -256,6 +271,21 @@ class TaskService:
         db.add(req)
         db.commit()
         db.refresh(req)
+
+        # Enviar notificación push a los administradores
+        try:
+            from .notification_service import NotificationService
+            admin_tokens = NotificationService.get_admin_tokens(db)
+            if admin_tokens:
+                NotificationService.send_push(
+                    tokens=admin_tokens,
+                    title="Solicitud de eliminación de tarea",
+                    body=f"{req.requested_by} solicita eliminar '{req.task_title}'",
+                    data={"request_id": str(req.id), "type": "delete_request"}
+                )
+        except Exception as e:
+            print(f"[PUSH] Aviso solicitud: {e}")
+
         return req
 
     @staticmethod
@@ -285,9 +315,27 @@ class TaskService:
         req.resolved_at = datetime.utcnow()
         db.commit()
         db.refresh(req)
+        appAndroid
+
+        # Enviar notificación push al solicitante
+        try:
+            from .notification_service import NotificationService
+            req_tokens = NotificationService.get_tokens_for_users(db, [req.requested_by])
+            if req_tokens:
+                estado = "aprobada y la tarea fue eliminada" if approve else "rechazada"
+                NotificationService.send_push(
+                    tokens=req_tokens,
+                    title=f"Solicitud {req.status}",
+                    body=f"Tu solicitud para eliminar '{req.task_title}' fue {estado}.",
+                    data={"request_id": str(req.id), "type": "delete_resolved"}
+                )
+        except Exception as e:
+            print(f"[PUSH] Aviso resolución: {e}")
+
         return req
 
     @staticmethod
+    
     def rename_project(db: Session, old_name: str, new_name: str) -> int:
         """Rename all tasks associated with old_name to new_name."""
         old_clean = old_name.strip()

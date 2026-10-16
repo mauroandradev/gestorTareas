@@ -1,3 +1,50 @@
+# Claves secretas y credenciales
+.secret_key
+*.key
+.env
+.env.*
+*service-account*.json
+
+# Dependencias Node.js
+node_modules/
+*/node_modules/
+android-app/node_modules/
+frontend/node_modules/
+
+# Entornos virtuales y Python
+__pycache__/
+*/__pycache__/
+*.pyc
+.venv/
+*/.venv/
+
+# Bases de datos locales
+*.db
+*.sqlite
+*.sqlite3
+
+# Compilación y builds
+dist/
+*/dist/
+build/
+*/build/
+
+# Android y Gradle
+.gradle/
+*/.gradle/
+android-app/android/.gradle/
+android-app/android/build/
+android-app/android/app/build/
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# IDEs y SO
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
+
+# Archivos específicos
 gestor_de_tareas_de_equipo
-README.md
-__pycache__
