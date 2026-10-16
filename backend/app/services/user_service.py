@@ -4,7 +4,7 @@ from sqlalchemy import desc
 
 from ..models.user import User
 from ..schemas.user import UserCreate, UserUpdate, UserLogin
-from ..core.security import hash_password, verify_password
+from ..core.security import hash_password, verify_password, needs_rehash
 
 
 class UserService:
@@ -33,6 +33,9 @@ class UserService:
             return None
         if not verify_password(credentials.password, user.password_hash):
             return None
+        if needs_rehash(user.password_hash):
+            user.password_hash = hash_password(credentials.password)
+            db.commit()
         return user
 
     @staticmethod

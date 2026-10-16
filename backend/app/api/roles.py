@@ -3,6 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
+from ..core.deps import get_current_user, require_admin
+from ..models.user import User
 from ..schemas.role import RoleCreate, RoleUpdate, RoleResponse
 from ..services.role_service import RoleService
 
@@ -10,13 +12,13 @@ router = APIRouter(prefix="/roles", tags=["Roles de Usuario"])
 
 
 @router.get("", response_model=List[RoleResponse], summary="Listar todos los roles")
-def get_roles(db: Session = Depends(get_db)):
+def get_roles(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
     """Obtiene la lista completa de roles junto con el conteo de usuarios por rol."""
     return RoleService.get_roles(db)
 
 
 @router.post("", response_model=RoleResponse, status_code=status.HTTP_201_CREATED, summary="Crear nuevo rol")
-def create_role(role_in: RoleCreate, db: Session = Depends(get_db)):
+def create_role(role_in: RoleCreate, db: Session = Depends(get_db), _: User = Depends(require_admin)):
     """Crea un nuevo rol en el sistema (Función de Administrador)."""
     try:
         return RoleService.create_role(db, role_in)
@@ -25,7 +27,7 @@ def create_role(role_in: RoleCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/{role_id}", response_model=RoleResponse, summary="Modificar rol")
-def update_role(role_id: int, role_in: RoleUpdate, db: Session = Depends(get_db)):
+def update_role(role_id: int, role_in: RoleUpdate, db: Session = Depends(get_db), _: User = Depends(require_admin)):
     """Actualiza el nombre y/o descripción de un rol. Si cambia el nombre, actualiza a los usuarios vinculados."""
     try:
         return RoleService.update_role(db, role_id, role_in)
@@ -34,7 +36,7 @@ def update_role(role_id: int, role_in: RoleUpdate, db: Session = Depends(get_db)
 
 
 @router.delete("/{role_id}", summary="Eliminar rol")
-def delete_role(role_id: int, db: Session = Depends(get_db)):
+def delete_role(role_id: int, db: Session = Depends(get_db), _: User = Depends(require_admin)):
     """Elimina un rol del sistema. Los usuarios asignados pasan automáticamente al rol 'Miembro'."""
     try:
         success = RoleService.delete_role(db, role_id)
